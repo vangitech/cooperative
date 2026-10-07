@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import AdminActivityBell from '@/components/AdminActivityBell';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { Breadcrumb } from '@/components/ui/breadcrumb';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -16,7 +17,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import {
   LayoutDashboard, Users, HandCoins, TrendingUp, Receipt,
-  Menu, Bell, LogOut, User as UserIcon, Shield, Home, Search, ScrollText, Store, Megaphone,
+  Menu, LogOut, User as UserIcon, Shield, Home, Search, ScrollText, Store, Megaphone,
 } from 'lucide-react';
 
 const adminNav = [
@@ -147,8 +148,7 @@ export default function AdminLayout() {
               </div>
 
               <div className="ml-auto flex items-center gap-2">
-                {/* Fake global search */}
-                <button
+                {/* Fake global search */}                <button
                   onClick={() => navigate('/admin/transactions')}
                   className="hidden lg:flex items-center gap-2 h-9 rounded-md border bg-muted/50 px-3 text-sm text-muted-foreground hover:bg-muted w-64"
                 >
@@ -157,15 +157,7 @@ export default function AdminLayout() {
                   <kbd className="ml-auto rounded border bg-background px-1.5 text-[10px] font-mono">⌘K</kbd>
                 </button>
 
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button variant="ghost" size="icon" className="relative">
-                      <Bell className="h-5 w-5" />
-                      <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-primary" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>Notifications</TooltipContent>
-                </Tooltip>
+                <AdminActivityBell />
 
                 <Separator orientation="vertical" className="h-8" />
 

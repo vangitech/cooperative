@@ -12,6 +12,7 @@ export default function NotificationsBell() {
   const navigate = useNavigate();
   const [items, setItems] = useState([]);
   const [unread, setUnread] = useState(0);
+  const [txs, setTxs] = useState([]);
 
   const load = async () => {
     try {
@@ -23,6 +24,12 @@ export default function NotificationsBell() {
       setUnread(count.unread);
     } catch {
       /* not logged in or offline — stay quiet */
+    }
+    try {
+      const recent = await api.get('/wallet/transactions?limit=5');
+      setTxs(Array.isArray(recent) ? recent : []);
+    } catch {
+      /* stay quiet */
     }
   };
 
@@ -83,6 +90,21 @@ export default function NotificationsBell() {
               {n.body && <span className="text-xs text-muted-foreground line-clamp-2">{n.body}</span>}
             </DropdownMenuItem>
           ))}
+          {txs.length > 0 && (
+            <>
+              <DropdownMenuLabel className="pt-3">Recent transactions</DropdownMenuLabel>
+              <DropdownMenuSeparator />
+              {txs.map((t) => (
+                <DropdownMenuItem key={`t-${t.id}`} onClick={() => navigate('/wallet')} className="flex-col items-start gap-1 py-2">
+                  <span className="text-sm capitalize">{t.type.replace(/_/g, ' ')} · {t.amount}</span>
+                  <span className="text-xs text-muted-foreground line-clamp-1">{t.description || t.reference}</span>
+                </DropdownMenuItem>
+              ))}
+            </>
+          )}
+          {items.length === 0 && txs.length === 0 && (
+            <p className="text-sm text-muted-foreground text-center py-6">You're all caught up</p>
+          )}
         </div>
       </DropdownMenuContent>
     </DropdownMenu>
