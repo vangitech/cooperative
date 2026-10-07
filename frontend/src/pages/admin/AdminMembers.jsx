@@ -1,0 +1,160 @@
+import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
+import { api } from '@/lib/api';
+import { formatCurrency, formatDate, initials } from '@/lib/format';
+import { Card, CardContent } from '@/components/ui/card';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem,
+  DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { MoreHorizontal, Search, UserX, UserCheck, Shield, ShieldOff } from 'lucide-react';
+
+export default function AdminMembers() {
+  const [users, setUsers] = useState(null);
+  const [q, setQ] = useState('');
+
+  const load = () => api.get('/admin/users').then(setUsers).catch((e) => toast.error(e.message));
+  useEffect(() => { load(); }, []);
+
+  const changeStatus = async (u, status) => {
+    try {
+      await api.patch(`/admin/users/${u.id}/status`, { status });
+      toast.success(`${u.first_name} ${status === 'active' ? 'activated' : 'suspended'}`);
+      load();
+    } catch (e) { toast.error(e.message); }
+  };
+
+  const changeRole = async (u, role) => {
+    try {
+      await api.patch(`/admin/users/${u.id}/role`, { role });
+      toast.success(`${u.first_name} is now ${role}`);
+      load();
+    } catch (e) { toast.error(e.message); }
+  };
+
+  const filtered = (users || []).filter((u) =>
+    `${u.first_name} ${u.last_name} ${u.email} ${u.phone || ''}`
+      .toLowerCase().includes(q.toLowerCase())
+  );
+
+  return (
+    <Card>
+      <CardContent className="p-0">
+        <div className="flex items-center gap-3 p-4 border-b">
+          <div className="relative w-full max-w-sm">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input placeholder="Search members…" className="pl-9" value={q} onChange={(e) => setQ(e.target.value)} />
+          </div>
+          <span className="ml-auto text-sm text-muted-foreground">{filtered.length} members</span>
+        </div>
+
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Member</TableHead>
+              <TableHead>Contact</TableHead>
+              <TableHead className="hidden md:table-cell">Joined</TableHead>
+              <TableHead className="text-right">Wallet</TableHead>
+              <TableHead className="text-right hidden lg:table-cell">Savings</TableHead>
+              <TableHead>Role</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead className="w-12"></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {!users ? (
+              Array.from({ length: 6 }).map((_, i) => (
+                <TableRow key={i}>
+                  {Array.from({ length: 8 }).map((__, j) => (
+                    <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>
+                  ))}
+                </TableRow>
+              ))
+            ) : filtered.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={8} className="text-center text-muted-foreground py-10">
+                  No members found
+                </TableCell>
+              </TableRow>
+            ) : filtered.map((u) => (
+              <TableRow key={u.id}>
+                <TableCell>
+                  <div className="flex items-center gap-3">
+                    <Avatar className="h-9 w-9">
+                      <AvatarFallback className="bg-primary/10 text-primary text-xs">
+                        {initials(u.first_name, u.last_name)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div>
+                      <p className="font-medium text-sm">{u.first_name} {u.last_name}</p>
+                      <p className="text-xs text-muted-foreground">{u.email}</p>
+                    </div>
+                  </div>
+                </TableCell>
+                <TableCell className="text-sm">{u.phone || '—'}</TableCell>
+                <TableCell className="hidden md:table-cell text-sm text-muted-foreground">
+                  {formatDate(u.created_at)}
+                </TableCell>
+                <TableCell className="text-right font-medium">{formatCurrency(u.balance)}</TableCell>
+                <TableCell className="text-right hidden lg:table-cell">{formatCurrency(u.total_savings)}</TableCell>
+                <TableCell>
+                  <Select value={u.role} onValueChange={(v) => changeRole(u, v)}>
+                    <SelectTrigger className="h-8 w-28"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="member">Member</SelectItem>
+                      <SelectItem value="admin">Admin</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </TableCell>
+                <TableCell>
+                  <Badge variant={u.status === 'active' ? 'success' : 'destructive'} className="capitalize">
+                    {u.status}
+                  </Badge>
+                </TableCell>
+                <TableCell>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon" className="h-8 w-8">
+                        <MoreHorizontal className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      {u.status === 'active' ? (
+                        <DropdownMenuItem className="text-destructive focus:text-destructive"
+                                          onClick={() => changeStatus(u, 'suspended')}>
+                          <UserX className="h-4 w-4" /> Suspend
+                        </DropdownMenuItem>
+                      ) : (
+                        <DropdownMenuItem onClick={() => changeStatus(u, 'active')}>
+                          <UserCheck className="h-4 w-4" /> Activate
+                        </DropdownMenuItem>
+                      )}
+                      {u.role === 'member' ? (
+                        <DropdownMenuItem onClick={() => changeRole(u, 'admin')}>
+                          <Shield className="h-4 w-4" /> Promote to Admin
+                        </DropdownMenuItem>
+                      ) : (
+                        <DropdownMenuItem onClick={() => changeRole(u, 'member')}>
+                          <ShieldOff className="h-4 w-4" /> Demote to Member
+                        </DropdownMenuItem>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
