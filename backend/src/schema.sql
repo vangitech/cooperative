@@ -160,3 +160,83 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_logs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_logs(actor_id);
 CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_logs(entity, entity_id);
+
+CREATE TABLE IF NOT EXISTS loan_products (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(80) UNIQUE NOT NULL,
+  description TEXT,
+  interest_rate NUMERIC(5,2) NOT NULL, -- flat annual %
+  penalty_rate NUMERIC(5,2) NOT NULL DEFAULT 5, -- one-time % of overdue installment
+  min_amount NUMERIC(15,2) NOT NULL DEFAULT 0,
+  max_amount NUMERIC(15,2),
+  min_duration_months INTEGER NOT NULL DEFAULT 1,
+  max_duration_months INTEGER NOT NULL DEFAULT 12,
+  required_savings_multiple NUMERIC(5,2) NOT NULL DEFAULT 0, -- must have saved >= amount * multiple
+  min_membership_months INTEGER NOT NULL DEFAULT 0,
+  requires_guarantors BOOLEAN NOT NULL DEFAULT false,
+  guarantor_count INTEGER NOT NULL DEFAULT 0,
+  status VARCHAR(20) NOT NULL DEFAULT 'active', -- active|archived
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO loan_products
+  (name, description, interest_rate, min_amount, max_amount, min_duration_months, max_duration_months,
+   required_savings_multiple, min_membership_months, requires_guarantors, guarantor_count)
+VALUES
+  ('Emergency Loan', 'Quick cash for urgent needs', 5, 1000, 100000, 1, 3, 0.5, 1, false, 0),
+  ('Business Loan', 'Grow your trade or business', 10, 10000, 1000000, 3, 12, 0.3, 3, true, 1),
+  ('Asset Loan', 'Equipment and household assets', 12, 50000, 2000000, 6, 24, 0.5, 6, true, 2)
+ON CONFLICT (name) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS loan_schedules (
+  id SERIAL PRIMARY KEY,
+  loan_id INTEGER NOT NULL REFERENCES loans(id) ON DELETE CASCADE,
+  due_number INTEGER NOT NULL,
+  due_date DATE NOT NULL,
+  amount_due NUMERIC(15,2) NOT NULL,
+  amount_paid NUMERIC(15,2) NOT NULL DEFAULT 0,
+  penalty_applied BOOLEAN NOT NULL DEFAULT false,
+  UNIQUE(loan_id, due_number)
+);
+
+CREATE TABLE IF NOT EXISTS deposit_rates (
+  id SERIAL PRIMARY KEY,
+  tenure_months INTEGER UNIQUE NOT NULL,
+  annual_rate NUMERIC(5,2) NOT NULL,
+  min_amount NUMERIC(15,2) NOT NULL DEFAULT 0,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO deposit_rates (tenure_months, annual_rate, min_amount) VALUES
+  (3, 8, 5000), (6, 10, 5000), (12, 12, 10000)
+ON CONFLICT (tenure_months) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS fixed_deposits (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  amount NUMERIC(15,2) NOT NULL,
+  tenure_months INTEGER NOT NULL,
+  annual_rate NUMERIC(5,2) NOT NULL,
+  expected_payout NUMERIC(15,2) NOT NULL,
+  starts_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  matures_at TIMESTAMPTZ NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'active', -- active|matured|broken
+  transaction_id INTEGER REFERENCES transactions(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS notifications (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title VARCHAR(160) NOT NULL,
+  body TEXT,
+  link VARCHAR(255),
+  is_read BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, created_at DESC);
+
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS product_id INTEGER REFERENCES loan_products(id);
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS penalty_accrued NUMERIC(15,2) NOT NULL DEFAULT 0;

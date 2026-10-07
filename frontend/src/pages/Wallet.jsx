@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { api } from '@/lib/api';
+import { api, download } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
 import { formatCurrency, formatDateTime } from '@/lib/format';
 import { Button } from '@/components/ui/button';
@@ -209,9 +209,14 @@ export default function Wallet() {
       )}
 
       <Card>
-        <CardHeader>
-          <CardTitle>Transaction History</CardTitle>
-          <CardDescription>All wallet activity</CardDescription>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <div>
+            <CardTitle>Transaction History</CardTitle>
+            <CardDescription>All wallet activity</CardDescription>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => download('/wallet/statement.csv', 'mpcs-statement.csv').catch((e) => setMsg({ type: 'err', text: e.message }))}>
+            Statement (CSV)
+          </Button>
         </CardHeader>
         <CardContent className="p-0">
           <Table>

@@ -11,6 +11,8 @@ import dividendRoutes from './routes/dividends.js';
 import adminRoutes from './routes/admin.js';
 import paymentsRoutes from './routes/payments.js';
 import kycRoutes from './routes/kyc.js';
+import fixedRoutes from './routes/fixed.js';
+import notificationRoutes from './routes/notifications.js';
 
 for (const key of ['DATABASE_URL', 'JWT_SECRET']) {
   if (!process.env[key]) {
@@ -35,6 +37,8 @@ app.use('/api/dividends', dividendRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/payments', paymentsRoutes);
 app.use('/api/kyc', kycRoutes);
+app.use('/api/fixed', fixedRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // 404
 app.use((req, res) => res.status(404).json({ message: 'Route not found' }));

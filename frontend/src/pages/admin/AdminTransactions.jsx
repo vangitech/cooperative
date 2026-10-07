@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { api } from '@/lib/api';
+import { api, download } from '@/lib/api';
 import { formatCurrency, formatDateTime, initials } from '@/lib/format';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -104,9 +104,14 @@ export default function AdminTransactions() {
             </DropdownMenuContent>
           </DropdownMenu>
 
-          <Button variant="outline" size="icon" onClick={exportCsv}>
+          <Button variant="outline" size="icon" onClick={exportCsv} title="Export current view">
             <Download className="h-4 w-4" />
           </Button>
+          <Button
+            variant="outline" size="sm"
+            onClick={() => download('/admin/export/transactions.csv', 'mpcs-transactions.csv').then(() => toast.success('Exported full ledger')).catch((e) => toast.error(e.message))}
+          >
+            Full Export</Button>
         </div>
       </CardHeader>
 

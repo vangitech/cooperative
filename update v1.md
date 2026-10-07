@@ -56,7 +56,7 @@ locks) and roles are enforced. What is missing falls into three tiers.
 
 ## Tier 3 — Growth
 
-10. **Member-to-member transfers** (wallet-to-wallet by email/phone).
+10. **Member-to-member transfers** (wallet-to-wallet by email/phone/wallet account number).
 11. **Announcements board** (AGM notices, dividend declarations —
     cooperatives run on meetings).
 12. **Finer admin roles** — loan officer vs. accountant vs. super-admin,

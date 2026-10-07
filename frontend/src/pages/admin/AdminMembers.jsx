@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { api } from '@/lib/api';
+import { api, download } from '@/lib/api';
 import { formatCurrency, formatDate, initials } from '@/lib/format';
 import { Card, CardContent } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -61,6 +61,11 @@ export default function AdminMembers() {
             <Input placeholder="Search members…" className="pl-9" value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
           <span className="ml-auto text-sm text-muted-foreground">{filtered.length} members</span>
+          <Button
+            variant="outline" size="sm"
+            onClick={() => download('/admin/export/members.csv', 'mpcs-members.csv').then(() => toast.success('Exported members')).catch((e) => toast.error(e.message))}
+          >
+            Export CSV</Button>
         </div>
 
         <Table>

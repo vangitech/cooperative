@@ -7,6 +7,7 @@ import {
   User, LogOut, Users, ShieldCheck, Receipt
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import NotificationsBell from '@/components/NotificationsBell';
 
 const memberNav = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -86,9 +87,12 @@ export default function Layout() {
           <h1 className="font-semibold capitalize">
             {user?.role === 'admin' ? 'Admin Panel' : 'Member Portal'}
           </h1>
-          <span className="text-sm text-muted-foreground hidden sm:block">
-            Welcome back, {user?.first_name}
-          </span>
+          <div className="flex items-center gap-1">
+            <span className="text-sm text-muted-foreground hidden sm:block mr-2">
+              Welcome back, {user?.first_name}
+            </span>
+            <NotificationsBell />
+          </div>
         </header>
 
         <main className="flex-1 p-4 md:p-6 overflow-auto">

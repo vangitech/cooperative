@@ -87,6 +87,18 @@ export default function AdminDashboard() {
               icon={HandCoins}
               hint={`${s.pending_loans} pending approval`}
             />
+            <StatCard
+              title="Overdue Loans"
+              value={s.overdue_loans}
+              icon={AlertCircle}
+              hint="Schedules past due"
+            />
+            <StatCard
+              title="Locked Fixed Deposits"
+              value={formatCurrency(s.active_fixed_deposits)}
+              icon={Wallet}
+              hint="Earning interest"
+            />
           </>
         )}
       </div>

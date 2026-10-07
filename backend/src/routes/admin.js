@@ -1,8 +1,10 @@
 import express from 'express';
 import { query, withTransaction } from '../db.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
-import { generateRef, toMoney, isPositiveNumber, asyncHandler } from '../utils/helpers.js';
+import { generateRef, toMoney, isPositiveNumber, asyncHandler, sendCsv } from '../utils/helpers.js';
 import { audit } from '../lib/audit.js';
+import { ensureSchedules } from '../lib/loans.js';
+import { notify } from '../lib/notify.js';
 
 const router = express.Router();
 router.use(authenticate, requireAdmin);
@@ -18,7 +20,10 @@ router.get('/stats', asyncHandler(async (req, res) => {
       (SELECT COALESCE(SUM(amount),0) FROM loans WHERE status IN ('disbursed','approved')) AS active_loans_amount,
       (SELECT COUNT(*) FROM loans WHERE status='pending') AS pending_loans,
       (SELECT COALESCE(SUM(amount),0) FROM dividends WHERE status='paid') AS total_dividends_paid,
-      (SELECT COUNT(*) FROM transactions) AS total_transactions
+      (SELECT COUNT(*) FROM transactions) AS total_transactions,
+      (SELECT COUNT(DISTINCT loan_id) FROM loan_schedules
+        WHERE due_date < CURRENT_DATE AND amount_paid < amount_due) AS overdue_loans,
+      (SELECT COALESCE(SUM(amount),0) FROM fixed_deposits WHERE status = 'active') AS active_fixed_deposits
   `);
 
   const monthly = await query(`
@@ -57,6 +62,13 @@ router.patch('/users/:id/status', asyncHandler(async (req, res) => {
   );
   if (!rows[0]) return res.status(404).json({ message: 'User not found' });
   audit(req, `member.${status}`, 'user', req.params.id, {});
+  if (status === 'active') {
+    notify(req.params.id, {
+      title: 'Membership approved',
+      body: 'Your account is active. You can now save, borrow and earn dividends.',
+      link: '/dashboard',
+    });
+  }
   res.json(rows[0]);
 }));
 
@@ -140,10 +152,14 @@ router.patch('/loans/:id', async (req, res) => {
          WHERE id=$3 RETURNING *`,
         [req.user.id, note || null, loan.id]
       );
+      await ensureSchedules(client, r.rows[0]);
       return r.rows[0];
     });
 
     audit(req, `loan.${status}`, 'loan', result.id, { amount: Number(result.amount) });
+    notify(result.user_id, status === 'approved'
+      ? { title: 'Loan approved', body: `Your loan of ${result.amount} has been disbursed to your wallet.`, link: '/loans' }
+      : { title: 'Loan application update', body: 'Your loan application was not approved. Contact support for details.', link: '/loans' });
     res.json(result);
   } catch (e) {
     res.status(400).json({ message: e.message });
@@ -194,6 +210,13 @@ router.post('/dividends', async (req, res) => {
     });
 
     audit(req, 'dividend.declared', 'dividend', null, { period, count: inserted.length });
+    for (const d of inserted) {
+      notify(d.user_id, {
+        title: 'Dividend declared',
+        body: `You received ${d.amount} for ${period}.`,
+        link: '/dividends',
+      });
+    }
     res.status(201).json({ count: inserted.length, dividends: inserted });
   } catch (e) {
     res.status(400).json({ message: e.message });
@@ -227,11 +250,123 @@ router.patch('/dividends/:id/pay', async (req, res) => {
       return r.rows[0];
     });
     audit(req, 'dividend.paid', 'dividend', result.id, { amount: Number(result.amount) });
+    notify(result.user_id, {
+      title: 'Dividend paid',
+      body: `${result.amount} for ${result.period} is now in your wallet.`,
+      link: '/dividends',
+    });
     res.json(result);
   } catch (e) {
     res.status(400).json({ message: e.message });
   }
 });
+
+/* ---------- Loan products ---------- */
+router.get('/loan-products', asyncHandler(async (req, res) => {
+  const { rows } = await query('SELECT * FROM loan_products ORDER BY min_amount');
+  res.json(rows);
+}));
+
+router.post('/loan-products', asyncHandler(async (req, res) => {
+  const {
+    name, description, interestRate, penaltyRate, minAmount, maxAmount,
+    minDurationMonths, maxDurationMonths, requiredSavingsMultiple,
+    minMembershipMonths, requiresGuarantors, guarantorCount,
+  } = req.body;
+  if (!name || interestRate === undefined)
+    return res.status(400).json({ message: 'Name and interest rate are required' });
+  try {
+    const { rows } = await query(
+      `INSERT INTO loan_products
+         (name, description, interest_rate, penalty_rate, min_amount, max_amount,
+          min_duration_months, max_duration_months, required_savings_multiple,
+          min_membership_months, requires_guarantors, guarantor_count)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      [
+        name, description || null, interestRate, penaltyRate ?? 5, minAmount ?? 0, maxAmount || null,
+        minDurationMonths ?? 1, maxDurationMonths ?? 12, requiredSavingsMultiple ?? 0,
+        minMembershipMonths ?? 0, !!requiresGuarantors, guarantorCount ?? 0,
+      ]
+    );
+    audit(req, 'loan_product.created', 'loan_product', rows[0].id, { name });
+    res.status(201).json(rows[0]);
+  } catch (e) {
+    if (e.code === '23505') return res.status(409).json({ message: 'A product with that name exists' });
+    throw e;
+  }
+}));
+
+router.patch('/loan-products/:id', asyncHandler(async (req, res) => {
+  const allowed = [
+    'description', 'interest_rate', 'penalty_rate', 'min_amount', 'max_amount',
+    'min_duration_months', 'max_duration_months', 'required_savings_multiple',
+    'min_membership_months', 'requires_guarantors', 'guarantor_count', 'status',
+  ];
+  const sets = [];
+  const params = [];
+  for (const key of allowed) {
+    const camel = key.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+    if (req.body[key] !== undefined || req.body[camel] !== undefined) {
+      params.push(req.body[key] !== undefined ? req.body[key] : req.body[camel]);
+      sets.push(`${key} = $${params.length}`);
+    }
+  }
+  if (!sets.length) return res.status(400).json({ message: 'Nothing to update' });
+  params.push(req.params.id);
+  const { rows } = await query(
+    `UPDATE loan_products SET ${sets.join(', ')} WHERE id = $${params.length} RETURNING *`,
+    params
+  );
+  if (!rows[0]) return res.status(404).json({ message: 'Product not found' });
+  audit(req, 'loan_product.updated', 'loan_product', rows[0].id, { name: rows[0].name });
+  res.json(rows[0]);
+}));
+
+/* ---------- Fixed deposits ---------- */
+router.get('/fixed-deposits', asyncHandler(async (req, res) => {
+  const { rows } = await query(`
+    SELECT f.*, u.first_name, u.last_name, u.email
+    FROM fixed_deposits f JOIN users u ON u.id = f.user_id
+    ORDER BY f.created_at DESC LIMIT 300
+  `);
+  res.json(rows);
+}));
+
+/* ---------- Exports ---------- */
+router.get('/export/transactions.csv', asyncHandler(async (req, res) => {
+  const { rows } = await query(`
+    SELECT t.created_at, u.email, t.reference, t.type, t.description, t.amount, t.balance_after
+    FROM transactions t JOIN users u ON u.id = t.user_id
+    ORDER BY t.created_at DESC LIMIT 5000
+  `);
+  sendCsv(res, 'mpcs-transactions.csv',
+    ['Date', 'Member Email', 'Reference', 'Type', 'Description', 'Amount', 'Balance After'],
+    rows.map((t) => [t.created_at, t.email, t.reference, t.type, t.description, t.amount, t.balance_after]));
+}));
+
+router.get('/export/loans.csv', asyncHandler(async (req, res) => {
+  const { rows } = await query(`
+    SELECT l.id, u.email, l.amount, l.interest_rate, l.duration_months, l.total_repayable,
+           l.amount_paid, l.penalty_accrued, l.status, l.created_at
+    FROM loans l JOIN users u ON u.id = l.user_id
+    ORDER BY l.created_at DESC LIMIT 5000
+  `);
+  sendCsv(res, 'mpcs-loans.csv',
+    ['ID', 'Member Email', 'Amount', 'Rate %', 'Months', 'Repayable', 'Paid', 'Penalties', 'Status', 'Created'],
+    rows.map((l) => [l.id, l.email, l.amount, l.interest_rate, l.duration_months, l.total_repayable, l.amount_paid, l.penalty_accrued, l.status, l.created_at]));
+}));
+
+router.get('/export/members.csv', asyncHandler(async (req, res) => {
+  const { rows } = await query(`
+    SELECT u.first_name, u.last_name, u.email, u.phone, u.role, u.status, u.created_at,
+           COALESCE(w.balance,0) AS balance
+    FROM users u LEFT JOIN wallets w ON w.user_id = u.id
+    ORDER BY u.created_at DESC LIMIT 5000
+  `);
+  sendCsv(res, 'mpcs-members.csv',
+    ['First Name', 'Last Name', 'Email', 'Phone', 'Role', 'Status', 'Joined', 'Wallet Balance'],
+    rows.map((u) => [u.first_name, u.last_name, u.email, u.phone, u.role, u.status, u.created_at, u.balance]));
+}));
 
 /* ---------- Audit log ---------- */
 router.get('/audit-logs', asyncHandler(async (req, res) => {

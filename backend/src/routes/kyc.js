@@ -3,6 +3,7 @@ import { query } from '../db.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/helpers.js';
 import { audit } from '../lib/audit.js';
+import { notify } from '../lib/notify.js';
 
 const router = express.Router();
 
@@ -136,6 +137,9 @@ router.patch(
     );
     if (!rows[0]) return res.status(404).json({ message: 'KYC profile not found' });
     audit(req, `kyc.${status}`, 'kyc', req.params.userId, { note: note || null });
+    notify(req.params.userId, status === 'approved'
+      ? { title: 'Identity verified', body: 'Your KYC has been approved.', link: '/profile' }
+      : { title: 'KYC needs attention', body: note || 'Your KYC was rejected. Update and resubmit.', link: '/profile' });
     res.json(rows[0]);
   })
 );

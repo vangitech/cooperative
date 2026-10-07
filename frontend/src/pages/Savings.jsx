@@ -19,12 +19,22 @@ export default function Savings() {
   const [form, setForm] = useState({ amount: '', savingsType: 'daily', note: '' });
   const [msg, setMsg] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [rates, setRates] = useState([]);
+  const [fds, setFds] = useState([]);
+  const [fdForm, setFdForm] = useState({ amount: '', tenureMonths: '' });
 
   const load = async () => {
     const [s, l] = await Promise.all([api.get('/savings/summary'), api.get('/savings')]);
     setSummary(s); setList(l);
   };
-  useEffect(() => { load(); }, []);
+  const loadFd = async () => {
+    const [r, m] = await Promise.all([
+      api.get('/fixed/rates').catch(() => []),
+      api.get('/fixed/mine').catch(() => []),
+    ]);
+    setRates(r); setFds(m);
+  };
+  useEffect(() => { load(); loadFd(); }, []);
 
   const submit = async (e) => {
     e.preventDefault(); setMsg(null); setSaving(true);
@@ -35,6 +45,33 @@ export default function Savings() {
       setMsg({ type: 'ok', text: 'Savings deposited successfully!' });
     } catch (e) { setMsg({ type: 'err', text: e.message }); }
     finally { setSaving(false); }
+  };
+
+  const lockFd = async (e) => {
+    e.preventDefault(); setMsg(null);
+    try {
+      await api.post('/fixed', { amount: Number(fdForm.amount), tenureMonths: Number(fdForm.tenureMonths) });
+      setFdForm({ amount: '', tenureMonths: '' });
+      await loadFd(); await refresh();
+      setMsg({ type: 'ok', text: 'Fixed deposit locked in!' });
+    } catch (e) { setMsg({ type: 'err', text: e.message }); }
+  };
+
+  const claimFd = async (id) => {
+    try {
+      await api.post(`/fixed/${id}/claim`);
+      await loadFd(); await refresh();
+      setMsg({ type: 'ok', text: 'Matured deposit claimed with interest!' });
+    } catch (e) { setMsg({ type: 'err', text: e.message }); }
+  };
+
+  const breakFd = async (id) => {
+    if (!window.confirm('Break this deposit early? Interest will be forfeited.')) return;
+    try {
+      await api.post(`/fixed/${id}/break`);
+      await loadFd(); await refresh();
+      setMsg({ type: 'ok', text: 'Deposit broken — principal refunded.' });
+    } catch (e) { setMsg({ type: 'err', text: e.message }); }
   };
 
   return (
@@ -94,6 +131,72 @@ export default function Savings() {
                 ))}
                 {list.length === 0 && (
                   <TableRow><TableCell colSpan={4} className="text-center text-muted-foreground py-8">No savings yet</TableCell></TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Card className="lg:col-span-1">
+          <CardHeader><CardTitle>Lock a Fixed Deposit</CardTitle></CardHeader>
+          <CardContent>
+            <form onSubmit={lockFd} className="space-y-4">
+              <div><Label>Amount</Label><Input type="number" min="1" required value={fdForm.amount} onChange={(e) => setFdForm({ ...fdForm, amount: e.target.value })} placeholder="0.00" /></div>
+              <div>
+                <Label>Tenure</Label>
+                <Select value={String(fdForm.tenureMonths)} onValueChange={(v) => setFdForm({ ...fdForm, tenureMonths: v })}>
+                  <SelectTrigger><SelectValue placeholder="Choose tenure…" /></SelectTrigger>
+                  <SelectContent>
+                    {rates.map((r) => (
+                      <SelectItem key={r.id} value={String(r.tenure_months)}>
+                        {r.tenure_months} months @ {r.annual_rate}% p.a. (min {formatCurrency(r.min_amount)})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button type="submit" className="w-full">Lock Deposit</Button>
+            </form>
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-2">
+          <CardHeader><CardTitle>My Fixed Deposits</CardTitle></CardHeader>
+          <CardContent className="p-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="text-right">Amount</TableHead>
+                  <TableHead>Terms</TableHead>
+                  <TableHead>Matures</TableHead>
+                  <TableHead>Expected</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {fds.map((f) => (
+                  <TableRow key={f.id}>
+                    <TableCell className="text-right font-medium">{formatCurrency(f.amount)}</TableCell>
+                    <TableCell className="text-sm">{f.tenure_months} mo @ {f.annual_rate}%</TableCell>
+                    <TableCell className="text-sm">{formatDate(f.matures_at)}</TableCell>
+                    <TableCell className="text-right text-green-600">{formatCurrency(f.expected_payout)}</TableCell>
+                    <TableCell className="capitalize text-sm">{f.status}</TableCell>
+                    <TableCell className="text-right whitespace-nowrap">
+                      {f.status === 'active' && (
+                        f.claimable ? (
+                          <Button size="sm" onClick={() => claimFd(f.id)}>Claim</Button>
+                        ) : (
+                          <Button size="sm" variant="outline" onClick={() => breakFd(f.id)}>Break</Button>
+                        )
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {fds.length === 0 && (
+                  <TableRow><TableCell colSpan={6} className="text-center text-muted-foreground py-8">No fixed deposits yet</TableCell></TableRow>
                 )}
               </TableBody>
             </Table>

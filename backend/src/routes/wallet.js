@@ -1,7 +1,7 @@
 import express from 'express';
 import { query, withTransaction } from '../db.js';
 import { authenticate } from '../middleware/auth.js';
-import { generateRef, isPositiveNumber, toMoney, asyncHandler } from '../utils/helpers.js';
+import { generateRef, isPositiveNumber, toMoney, asyncHandler, sendCsv } from '../utils/helpers.js';
 
 const router = express.Router();
 router.use(authenticate);
@@ -21,6 +21,32 @@ router.get('/transactions', asyncHandler(async (req, res) => {
     [req.user.id, limit]
   );
   res.json(rows);
+}));
+
+// Downloadable account statement (CSV, optional ?from=YYYY-MM-DD&to=YYYY-MM-DD).
+router.get('/statement.csv', asyncHandler(async (req, res) => {
+  const { from, to } = req.query;
+  const params = [req.user.id];
+  let range = '';
+  if (from) {
+    params.push(from);
+    range += ` AND created_at >= $${params.length}`;
+  }
+  if (to) {
+    params.push(to);
+    range += ` AND created_at <= $${params.length}`;
+  }
+  const { rows } = await query(
+    `SELECT created_at, reference, type, description, amount, balance_after
+     FROM transactions WHERE user_id = $1 ${range} ORDER BY created_at`,
+    params
+  );
+  sendCsv(
+    res,
+    `mpcs-statement-${new Date().toISOString().slice(0, 10)}.csv`,
+    ['Date', 'Reference', 'Type', 'Description', 'Amount', 'Balance After'],
+    rows.map((t) => [t.created_at, t.reference, t.type, t.description, t.amount, t.balance_after])
+  );
 }));
 
 router.post('/deposit', async (req, res) => {

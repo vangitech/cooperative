@@ -12,6 +12,7 @@ import {
   resolveAccount,
 } from '../lib/flutterwave.js';
 import { audit } from '../lib/audit.js';
+import { notify } from '../lib/notify.js';
 
 const router = express.Router();
 
@@ -45,6 +46,10 @@ async function creditFundIntent(client, intentId, flwRef) {
     `INSERT INTO transactions (user_id, wallet_id, type, amount, balance_after, reference, description)
      VALUES ($1,$2,'deposit',$3,$4,$5,$6) RETURNING *`,
     [intent.user_id, w.rows[0].id, amt, newBalance, intent.tx_ref, `Flutterwave funding (${flwRef || intent.tx_ref})`]
+  );
+  await client.query(
+    `INSERT INTO notifications (user_id, title, body, link) VALUES ($1,$2,$3,$4)`,
+    [intent.user_id, 'Wallet funded', `${amt} NGN added via Flutterwave`, '/wallet']
   );
   await client.query(`UPDATE payment_intents SET status = 'successful', updated_at = NOW() WHERE id = $1`, [
     intent.id,
@@ -269,6 +274,11 @@ router.post(
 
     audit(req, 'wallet.withdraw_bank', 'payment_intent', intent.id, {
       reference: txRef, amount: amt,
+    });
+    notify(req.user.id, {
+      title: 'Withdrawal submitted',
+      body: `${amt} NGN payout to ${accountNumber} is being processed.`,
+      link: '/wallet',
     });
     res.status(201).json({
       reference: txRef,
