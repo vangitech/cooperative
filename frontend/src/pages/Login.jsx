@@ -5,7 +5,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import CoopHero from '@/components/CoopHero';
 
 export default function Login() {
   const { login } = useAuth();
@@ -28,11 +27,17 @@ export default function Login() {
   return (
     <div className="min-h-screen grid lg:grid-cols-2">
       <div className="hidden lg:flex flex-col justify-center p-12 bg-primary text-primary-foreground">
-        <CoopHero className="w-full max-w-md mx-auto mb-6 h-auto" />
+        <img
+          src="/hero-unity.jpg"
+          alt="Diverse cooperative members joining hands together in unity"
+          className="w-full max-w-md mx-auto mb-6 h-auto rounded-2xl shadow-lg object-cover"
+          loading="eager"
+        />
         <h1 className="text-4xl font-bold mb-3 text-center">Multi-Purpose Cooperative Society</h1>
         <p className="text-lg opacity-90 text-center">
           Save daily. Access affordable loans. Earn dividends. All in one secure platform.
         </p>
+        <p className="text-xs opacity-60 text-center mt-4">Photo by Alex Levis on Pexels</p>
       </div>
 
       <div className="flex items-center justify-center p-6">
