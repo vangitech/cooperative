@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS users (
   phone      VARCHAR(30),
   address    TEXT,
   role       VARCHAR(20) NOT NULL DEFAULT 'member',
-  status     VARCHAR(20) NOT NULL DEFAULT 'active',
+  status     VARCHAR(20) NOT NULL DEFAULT 'pending',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

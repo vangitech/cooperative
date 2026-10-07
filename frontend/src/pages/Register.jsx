@@ -8,12 +8,13 @@ import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 
 export default function Register() {
-  const { register } = useAuth();
+  const { register, logout } = useAuth();
   const navigate = useNavigate();
   const [form, setForm] = useState({
     firstName: '', lastName: '', email: '', password: '', phone: '', address: '',
   });
   const [error, setError] = useState('');
+  const [pending, setPending] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const update = (k) => (e) => setForm({ ...form, [k]: e.target.value });
@@ -22,8 +23,14 @@ export default function Register() {
     e.preventDefault();
     setError(''); setLoading(true);
     try {
-      await register(form);
-      navigate('/dashboard');
+      const user = await register(form);
+      if (user.status !== 'active') {
+        // Membership needs admin approval — don't enter the app yet.
+        logout();
+        setPending(true);
+      } else {
+        navigate('/dashboard');
+      }
     } catch (err) { setError(err.message); }
     finally { setLoading(false); }
   };
@@ -44,6 +51,17 @@ export default function Register() {
             <CardDescription>Register to become a member</CardDescription>
           </CardHeader>
           <CardContent>
+            {pending ? (
+              <div className="space-y-4 text-center py-4">
+                <div className="text-sm bg-green-50 text-green-700 p-4 rounded-md">
+                  Application received. An admin will review it shortly —
+                  you'll be able to sign in once approved.
+                </div>
+                <Button asChild variant="outline" className="w-full">
+                  <Link to="/login">Back to Sign in</Link>
+                </Button>
+              </div>
+            ) : (
             <form onSubmit={submit} className="space-y-4">
               {error && <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">{error}</div>}
               <div className="grid grid-cols-2 gap-3">
@@ -61,6 +79,7 @@ export default function Register() {
                 Already a member? <Link to="/login" className="text-primary font-medium hover:underline">Sign in</Link>
               </p>
             </form>
+            )}
           </CardContent>
         </Card>
       </div>

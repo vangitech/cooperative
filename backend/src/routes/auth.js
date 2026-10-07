@@ -27,8 +27,8 @@ router.post('/register', async (req, res) => {
 
     const user = await withTransaction(async (client) => {
       const { rows } = await client.query(
-        `INSERT INTO users (first_name,last_name,email,password_hash,phone,address)
-         VALUES ($1,$2,$3,$4,$5,$6)
+        `INSERT INTO users (first_name,last_name,email,password_hash,phone,address,status)
+         VALUES ($1,$2,$3,$4,$5,$6,'pending')
          RETURNING id, first_name, last_name, email, role, status, created_at`,
         [firstName, lastName, email.toLowerCase(), hash, phone || null, address || null]
       );
@@ -51,6 +51,8 @@ router.post('/login', async (req, res) => {
     const { rows } = await query('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
     const user = rows[0];
     if (!user) return res.status(401).json({ message: 'Invalid credentials' });
+    if (user.status === 'pending')
+      return res.status(403).json({ message: 'Account pending approval. An admin will review your application.' });
     if (user.status !== 'active') return res.status(403).json({ message: 'Account suspended' });
 
     const ok = await bcrypt.compare(password, user.password_hash);

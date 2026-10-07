@@ -13,6 +13,8 @@ export async function authenticate(req, res, next) {
       [payload.id]
     );
     if (!rows[0]) return res.status(401).json({ message: 'User not found' });
+    if (rows[0].status === 'pending')
+      return res.status(403).json({ message: 'Account pending approval' });
     if (rows[0].status !== 'active')
       return res.status(403).json({ message: 'Account is suspended' });
 
