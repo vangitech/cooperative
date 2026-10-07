@@ -240,3 +240,17 @@ CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, created_at D
 
 ALTER TABLE loans ADD COLUMN IF NOT EXISTS product_id INTEGER REFERENCES loan_products(id);
 ALTER TABLE loans ADD COLUMN IF NOT EXISTS penalty_accrued NUMERIC(15,2) NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS virtual_accounts (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  account_number VARCHAR(20) UNIQUE NOT NULL,
+  bank_name VARCHAR(120) NOT NULL,
+  flw_ref VARCHAR(100),
+  tx_ref VARCHAR(100) UNIQUE NOT NULL,
+  is_permanent BOOLEAN NOT NULL DEFAULT true,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS flw_id VARCHAR(120) UNIQUE;

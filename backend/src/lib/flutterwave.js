@@ -69,3 +69,20 @@ export const resolveAccount = (accountNumber, bankCode) =>
     account_number: accountNumber,
     account_bank: bankCode,
   });
+
+// Create a static (permanent) virtual account for wallet funding.
+// Static NGN accounts require BVN or NIN in live mode; test mode is lenient.
+export const createVirtualAccount = ({ email, txRef, firstname, lastname, phonenumber, narration, bvn, nin }) => {
+  const body = {
+    email,
+    tx_ref: txRef,
+    firstname,
+    lastname,
+    narration: narration || `MPCS wallet for ${firstname} ${lastname}`.slice(0, 60),
+    is_permanent: true,
+  };
+  if (phonenumber) body.phonenumber = phonenumber;
+  if (bvn) body.bvn = bvn;
+  else if (nin) body.nin = nin;
+  return flwRequest('POST', '/virtual-account-numbers', body);
+};

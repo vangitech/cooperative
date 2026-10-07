@@ -23,7 +23,8 @@ const callbackUrl = () => process.env.FUND_CALLBACK_URL || 'http://localhost:517
 
 // Credit a verified funding intent exactly once (idempotent).
 // Must be called inside withTransaction; locks the intent row first.
-async function creditFundIntent(client, intentId, flwRef) {
+// flw = verification data ({ id, flw_ref }) used for idempotency + records.
+async function creditFundIntent(client, intentId, flw) {
   const locked = await client.query('SELECT * FROM payment_intents WHERE id = $1 FOR UPDATE', [intentId]);
   const intent = locked.rows[0];
   if (!intent) throw new Error('Payment intent not found');
@@ -42,10 +43,12 @@ async function creditFundIntent(client, intentId, flwRef) {
   await client.query('UPDATE wallets SET balance = $1, updated_at = NOW() WHERE id = $2', [
     newBalance, w.rows[0].id,
   ]);
+  const flwRef = flw?.flw_ref || intent.tx_ref;
+  const flwId = flw?.id ? String(flw.id) : null;
   const tx = await client.query(
-    `INSERT INTO transactions (user_id, wallet_id, type, amount, balance_after, reference, description)
-     VALUES ($1,$2,'deposit',$3,$4,$5,$6) RETURNING *`,
-    [intent.user_id, w.rows[0].id, amt, newBalance, intent.tx_ref, `Flutterwave funding (${flwRef || intent.tx_ref})`]
+    `INSERT INTO transactions (user_id, wallet_id, type, amount, balance_after, reference, description, flw_id)
+     VALUES ($1,$2,'deposit',$3,$4,$5,$6,$7) RETURNING *`,
+    [intent.user_id, w.rows[0].id, amt, newBalance, intent.tx_ref, `Flutterwave funding (${flwRef})`, flwId]
   );
   await client.query(
     `INSERT INTO notifications (user_id, title, body, link) VALUES ($1,$2,$3,$4)`,
@@ -54,9 +57,37 @@ async function creditFundIntent(client, intentId, flwRef) {
   await client.query(`UPDATE payment_intents SET status = 'successful', updated_at = NOW() WHERE id = $1`, [
     intent.id,
   ]);
-  if (flwRef) {
-    await client.query(`UPDATE payment_intents SET flw_id = $1 WHERE id = $2`, [String(flwRef), intent.id]);
+  if (flw?.id) {
+    await client.query(`UPDATE payment_intents SET flw_id = $1 WHERE id = $2`, [String(flw.id), intent.id]);
   }
+  return { already: false, transaction: tx.rows[0], balance: newBalance };
+}
+
+// Credit a bank transfer received on a member's virtual funding account.
+// Idempotent via the Flutterwave transaction id.
+async function creditVirtualAccount(client, userId, flw, accountNumber) {
+  const flwId = String(flw.id);
+  const dup = await client.query('SELECT id FROM transactions WHERE flw_id = $1', [flwId]);
+  if (dup.rows[0]) return { already: true };
+
+  const amt = toMoney(flw.amount);
+  if (!(amt > 0)) throw new Error('Invalid amount');
+  const w = await client.query('SELECT * FROM wallets WHERE user_id = $1 FOR UPDATE', [userId]);
+  if (!w.rows[0]) throw new Error('Wallet not found');
+
+  const newBalance = toMoney(Number(w.rows[0].balance) + amt);
+  await client.query('UPDATE wallets SET balance = $1, updated_at = NOW() WHERE id = $2', [
+    newBalance, w.rows[0].id,
+  ]);
+  const tx = await client.query(
+    `INSERT INTO transactions (user_id, wallet_id, type, amount, balance_after, reference, description, flw_id)
+     VALUES ($1,$2,'deposit',$3,$4,$5,$6,$7) RETURNING *`,
+    [userId, w.rows[0].id, amt, newBalance, generateRef('VAB'), `Bank transfer to ${accountNumber}`, flwId]
+  );
+  await client.query(
+    `INSERT INTO notifications (user_id, title, body, link) VALUES ($1,$2,$3,$4)`,
+    [userId, 'Wallet funded', `${amt} NGN received via bank transfer`, '/wallet']
+  );
   return { already: false, transaction: tx.rows[0], balance: newBalance };
 }
 
@@ -164,7 +195,7 @@ router.get(
     }
 
     const result = await withTransaction((client) =>
-      creditFundIntent(client, intent.id, verification.data?.flw_ref)
+      creditFundIntent(client, intent.id, verification.data)
     );
     audit(req, 'wallet.funded_online', 'payment_intent', intent.id, {
       txRef, amount: Number(intent.amount),
@@ -359,24 +390,54 @@ router.post(
     const { event, data } = req.body || {};
 
     try {
-      if (event === 'charge.completed' && data?.tx_ref) {
-        const found = await query(
-          `SELECT * FROM payment_intents WHERE tx_ref = $1 AND kind = 'fund' AND status = 'pending'`,
-          [data.tx_ref]
-        );
+      if ((event === 'charge.completed' && data?.tx_ref) || event === 'virtual_account.credited') {
+        const found = data?.tx_ref
+          ? await query(
+              `SELECT * FROM payment_intents WHERE tx_ref = $1 AND kind = 'fund' AND status = 'pending'`,
+              [data.tx_ref]
+            )
+          : { rows: [] };
         const intent = found.rows[0];
         if (intent) {
           // Never trust the webhook body alone — re-verify with Flutterwave.
           const verification = await verifyTransactionById(data.id);
           if (flwOk(verification.data, intent)) {
             await withTransaction((client) =>
-              creditFundIntent(client, intent.id, verification.data?.flw_ref)
+              creditFundIntent(client, intent.id, verification.data)
             );
             audit(
               { user: { id: intent.user_id }, ip: req.ip },
               'wallet.funded_online', 'payment_intent', intent.id,
               { txRef: intent.tx_ref, via: 'webhook' }
             );
+          }
+        } else {
+          // Bank transfer straight into a member's virtual funding account:
+          // match our creation tx_ref first, then the account number itself.
+          const va = await query(
+            `SELECT * FROM virtual_accounts WHERE tx_ref = $1 OR account_number = $2`,
+            [data?.tx_ref || '', data?.account_number || '']
+          );
+          const account = va.rows[0];
+          if (account && data?.id) {
+            const verification = await verifyTransactionById(data.id);
+            const v = verification.data || {};
+            if (
+              v.status === 'successful' &&
+              (v.currency || '').toUpperCase() === 'NGN' &&
+              Number(v.amount) > 0
+            ) {
+              const result = await withTransaction((client) =>
+                creditVirtualAccount(client, account.user_id, v, account.account_number)
+              );
+              if (!result.already) {
+                audit(
+                  { user: { id: account.user_id }, ip: req.ip },
+                  'wallet.funded_account', 'virtual_account', account.id,
+                  { amount: Number(v.amount), via: 'webhook' }
+                );
+              }
+            }
           }
         }
       } else if (event === 'transfer.completed' && data?.reference) {

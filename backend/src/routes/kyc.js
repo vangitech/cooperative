@@ -4,6 +4,7 @@ import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/helpers.js';
 import { audit } from '../lib/audit.js';
 import { notify } from '../lib/notify.js';
+import { assignVirtualAccount } from '../lib/virtualAccounts.js';
 
 const router = express.Router();
 
@@ -140,6 +141,14 @@ router.patch(
     notify(req.params.userId, status === 'approved'
       ? { title: 'Identity verified', body: 'Your KYC has been approved.', link: '/profile' }
       : { title: 'KYC needs attention', body: note || 'Your KYC was rejected. Update and resubmit.', link: '/profile' });
+
+    // Approving a NIN-verified profile unlocks the static funding account
+    // (live mode requires NIN/BVN). Best-effort — failures stay retryable.
+    if (status === 'approved' && rows[0].id_type === 'nin' && rows[0].id_number) {
+      assignVirtualAccount(req.params.userId, { nin: rows[0].id_number }).catch((e) =>
+        console.error('kyc-triggered account assignment failed:', e.message)
+      );
+    }
     res.json(rows[0]);
   })
 );

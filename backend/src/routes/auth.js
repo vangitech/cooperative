@@ -5,6 +5,7 @@ import { query, withTransaction } from '../db.js';
 import { authenticate } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/helpers.js';
 import { audit, hashToken, newResetToken } from '../lib/audit.js';
+import { assignVirtualAccount } from '../lib/virtualAccounts.js';
 import { sendMail, appUrl } from '../lib/mailer.js';
 import { authLimiter, forgotLimiter } from '../lib/rateLimit.js';
 
@@ -39,7 +40,16 @@ router.post('/register', authLimiter, async (req, res) => {
       return rows[0];
     });
 
-    res.status(201).json({ token: signToken(user), user });
+    // Funding account is best-effort: registration succeeds even if
+    // Flutterwave is unreachable (admin can retry assignment later).
+    let virtualAccount = null;
+    try {
+      virtualAccount = await assignVirtualAccount(user.id);
+    } catch (e) {
+      console.error('virtual account deferred:', e.message);
+    }
+
+    res.status(201).json({ token: signToken(user), user, virtualAccount });
     audit(req, 'auth.register', 'user', user.id, { email: user.email }, user.id);
   } catch (e) {
     console.error(e);

@@ -368,6 +368,51 @@ router.get('/export/members.csv', asyncHandler(async (req, res) => {
     rows.map((u) => [u.first_name, u.last_name, u.email, u.phone, u.role, u.status, u.created_at, u.balance]));
 }));
 
+/* ---------- Manual funding (officer credits a member by email/account) ---------- */
+router.post('/fund', asyncHandler(async (req, res) => {
+  const { identifier, amount, note } = req.body;
+  if (!identifier) return res.status(400).json({ message: 'Member email or account number is required' });
+  if (!isPositiveNumber(amount)) return res.status(400).json({ message: 'Invalid amount' });
+  const amt = toMoney(amount);
+
+  const result = await withTransaction(async (client) => {
+    const q = String(identifier).trim();
+    let target = null;
+    if (/^\d{10}$/.test(q)) {
+      const va = await client.query(
+        'SELECT u.* FROM virtual_accounts v JOIN users u ON u.id = v.user_id WHERE v.account_number = $1',
+        [q]
+      );
+      target = va.rows[0];
+    } else {
+      const u = await client.query('SELECT * FROM users WHERE email = $1', [q.toLowerCase()]);
+      target = u.rows[0];
+    }
+    if (!target) throw new Error('Member not found');
+    if (target.status !== 'active') throw new Error('Member account is not active');
+
+    const w = await client.query('SELECT * FROM wallets WHERE user_id = $1 FOR UPDATE', [target.id]);
+    if (!w.rows[0]) throw new Error('Wallet not found');
+    const newBalance = toMoney(Number(w.rows[0].balance) + amt);
+    await client.query('UPDATE wallets SET balance = $1, updated_at = NOW() WHERE id = $2', [
+      newBalance, w.rows[0].id,
+    ]);
+    const tx = await client.query(
+      `INSERT INTO transactions (user_id, wallet_id, type, amount, balance_after, reference, description)
+       VALUES ($1,$2,'deposit',$3,$4,$5,$6) RETURNING *`,
+      [target.id, w.rows[0].id, amt, newBalance, generateRef('ADM'), note || 'Officer funding']
+    );
+    await client.query(
+      `INSERT INTO notifications (user_id, title, body, link) VALUES ($1,$2,$3,$4)`,
+      [target.id, 'Wallet funded', `${amt} NGN was added to your wallet by an officer.`, '/wallet']
+    );
+    return { member: `${target.first_name} ${target.last_name}`, transaction: tx.rows[0], balance: newBalance };
+  });
+
+  audit(req, 'wallet.funded_manual', 'user', result.transaction.user_id, { amount: amt, note: note || null });
+  res.status(201).json(result);
+}));
+
 /* ---------- Audit log ---------- */
 router.get('/audit-logs', asyncHandler(async (req, res) => {
   const { action, entity, limit } = req.query;

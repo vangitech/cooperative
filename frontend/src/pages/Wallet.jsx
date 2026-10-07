@@ -33,6 +33,12 @@ export default function Wallet() {
   const [acctError, setAcctError] = useState('');
   const [analytics, setAnalytics] = useState(null);
   const [months, setMonths] = useState(6);
+  const [vaccount, setVaccount] = useState(null);
+  const [sendOpen, setSendOpen] = useState(false);
+  const [sendId, setSendId] = useState('');
+  const [sendAmount, setSendAmount] = useState('');
+  const [recipient, setRecipient] = useState(null);
+  const [sendLoading, setSendLoading] = useState(false);
 
   // Auto-resolve the account holder's name once a full 10-digit
   // account number is entered AND a bank is selected.
@@ -65,6 +71,7 @@ export default function Wallet() {
   const load = async () => {
     const [w, t] = await Promise.all([api.get('/wallet'), api.get('/wallet/transactions')]);
     setWallet(w); setTxs(t);
+    api.get('/virtual-accounts/me').then(setVaccount).catch(() => setVaccount(null));
   };
   useEffect(() => { load(); }, []);
 
@@ -117,6 +124,35 @@ export default function Wallet() {
       setMsg({ type: 'ok', text: `Withdrawal submitted (${r.reference}). Status: ${r.status}` });
     } catch (e) { setMsg({ type: 'err', text: e.message }); }
     finally { setWdLoading(false); }
+  };
+
+  const copyAccount = async () => {
+    try {
+      await navigator.clipboard.writeText(vaccount.account_number);
+      setMsg({ type: 'ok', text: 'Account number copied' });
+    } catch { setMsg({ type: 'err', text: 'Could not copy' }); }
+  };
+
+  const resolveRecipient = async () => {
+    setMsg(null); setRecipient(null);
+    try {
+      const r = await api.get(`/wallet/resolve-recipient?q=${encodeURIComponent(sendId.trim())}`);
+      setRecipient(r);
+    } catch (e) { setMsg({ type: 'err', text: e.message }); }
+  };
+
+  const submitSend = async () => {
+    setMsg(null); setSendLoading(true);
+    try {
+      const r = await api.post('/wallet/transfer', {
+        recipient: sendId.trim(),
+        amount: Number(sendAmount),
+      });
+      setSendId(''); setSendAmount(''); setRecipient(null); setSendOpen(false);
+      await load(); await refresh();
+      setMsg({ type: 'ok', text: `Sent ${r.amount} to ${r.recipient} (${r.reference})` });
+    } catch (e) { setMsg({ type: 'err', text: e.message }); }
+    finally { setSendLoading(false); }
   };
 
   return (
@@ -217,6 +253,47 @@ export default function Wallet() {
           {msg.text}
         </div>
       )}
+
+      <Card>
+        <CardContent className="p-6 flex flex-col sm:flex-row sm:items-center gap-4">
+          <div className="flex-1">
+            <p className="text-sm text-muted-foreground">My Funding Account — bank transfer from any app</p>
+            {vaccount ? (
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1">
+                <span className="text-2xl font-mono font-bold tracking-wider">{vaccount.account_number}</span>
+                <span className="text-sm text-muted-foreground">{vaccount.bank_name}</span>
+                <Button variant="outline" size="sm" onClick={copyAccount}>Copy</Button>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground mt-1">Your personal account is being set up…</p>
+            )}
+          </div>
+          <Dialog open={sendOpen} onOpenChange={(v) => {
+            setSendOpen(v);
+            if (!v) { setSendId(''); setSendAmount(''); setRecipient(null); }
+          }}>
+            <DialogTrigger asChild>
+              <Button>Send Money</Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader><DialogTitle>Send to a Member</DialogTitle></DialogHeader>
+              <div><Label>Email or account number</Label><Input value={sendId} onChange={(e) => { setSendId(e.target.value); setRecipient(null); }} placeholder="member@example.com or 10-digit account" /></div>
+              <Button variant="outline" onClick={resolveRecipient}>Verify Recipient</Button>
+              {recipient && (
+                <div className="text-sm p-3 rounded-md bg-green-50 text-green-700">
+                  To: <span className="font-semibold">{recipient.name}</span> ({recipient.email})
+                </div>
+              )}
+              <div><Label>Amount (₦)</Label><Input type="number" min="1" value={sendAmount} onChange={(e) => setSendAmount(e.target.value)} placeholder="0.00" /></div>
+              <DialogFooter>
+                <Button onClick={submitSend} disabled={sendLoading || !recipient}>
+                  {sendLoading ? 'Sending…' : 'Confirm Send'}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0">
@@ -324,8 +401,8 @@ export default function Wallet() {
                   <TableCell className="font-mono text-xs">{t.reference}</TableCell>
                   <TableCell><Badge variant="outline" className="capitalize">{t.type.replace('_', ' ')}</Badge></TableCell>
                   <TableCell className="text-sm">{t.description}</TableCell>
-                  <TableCell className={`text-right font-medium ${['withdrawal','loan_repayment'].includes(t.type) ? 'text-destructive' : 'text-green-600'}`}>
-                    {['withdrawal','loan_repayment'].includes(t.type) ? '-' : '+'}{formatCurrency(t.amount)}
+                  <TableCell className={`text-right font-medium ${['withdrawal','loan_repayment','transfer_out'].includes(t.type) ? 'text-destructive' : 'text-green-600'}`}>
+                    {['withdrawal','loan_repayment','transfer_out'].includes(t.type) ? '-' : '+'}{formatCurrency(t.amount)}
                   </TableCell>
                   <TableCell className="text-right">{formatCurrency(t.balance_after)}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{formatDateTime(t.created_at)}</TableCell>

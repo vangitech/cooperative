@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import CoopHero from '@/components/CoopHero';
 
 export default function Register() {
   const { register, logout } = useAuth();
@@ -14,7 +15,7 @@ export default function Register() {
     firstName: '', lastName: '', email: '', password: '', phone: '', address: '',
   });
   const [error, setError] = useState('');
-  const [pending, setPending] = useState(false);
+  const [pending, setPending] = useState(null); // { virtualAccount } on approval-pending signup
   const [loading, setLoading] = useState(false);
 
   const update = (k) => (e) => setForm({ ...form, [k]: e.target.value });
@@ -23,11 +24,11 @@ export default function Register() {
     e.preventDefault();
     setError(''); setLoading(true);
     try {
-      const user = await register(form);
-      if (user.status !== 'active') {
+      const data = await register(form);
+      if (data.user.status !== 'active') {
         // Membership needs admin approval — don't enter the app yet.
         logout();
-        setPending(true);
+        setPending({ virtualAccount: data.virtualAccount || null });
       } else {
         navigate('/dashboard');
       }
@@ -38,8 +39,9 @@ export default function Register() {
   return (
     <div className="min-h-screen grid lg:grid-cols-2">
       <div className="hidden lg:flex flex-col justify-center p-12 bg-primary text-primary-foreground">
-        <h1 className="text-4xl font-bold mb-3">Join the Cooperative</h1>
-        <p className="text-lg opacity-90">
+        <CoopHero className="w-full max-w-md mx-auto mb-6 h-auto" />
+        <h1 className="text-4xl font-bold mb-3 text-center">Join the Cooperative</h1>
+        <p className="text-lg opacity-90 text-center">
           Create your account, get a wallet, start saving and unlock loans & dividends.
         </p>
       </div>
@@ -57,6 +59,17 @@ export default function Register() {
                   Application received. An admin will review it shortly —
                   you'll be able to sign in once approved.
                 </div>
+                {pending.virtualAccount ? (
+                  <div className="text-sm border rounded-md p-4 space-y-1">
+                    <p className="text-muted-foreground">Your funding account (bank transfer from any app):</p>
+                    <p className="text-2xl font-mono font-bold tracking-wider">{pending.virtualAccount.account_number}</p>
+                    <p className="text-muted-foreground">{pending.virtualAccount.bank_name}</p>
+                  </div>
+                ) : (
+                  <div className="text-sm text-muted-foreground border rounded-md p-4">
+                    Your personal funding account is being set up — it will appear in your wallet after approval.
+                  </div>
+                )}
                 <Button asChild variant="outline" className="w-full">
                   <Link to="/login">Back to Sign in</Link>
                 </Button>

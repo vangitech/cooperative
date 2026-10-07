@@ -14,11 +14,20 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { MoreHorizontal, Search, UserX, UserCheck, Shield, ShieldOff } from 'lucide-react';
+import { MoreHorizontal, Search, UserX, UserCheck, Shield, ShieldOff, Wallet } from 'lucide-react';
+import {
+  Dialog, DialogContent, DialogFooter,
+  DialogHeader, DialogTitle,
+} from '@/components/ui/dialog';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 
 export default function AdminMembers() {
   const [users, setUsers] = useState(null);
   const [q, setQ] = useState('');
+  const [fundTarget, setFundTarget] = useState(null);
+  const [fundAmount, setFundAmount] = useState('');
+  const [fundNote, setFundNote] = useState('');
 
   const load = () => api.get('/admin/users').then(setUsers).catch((e) => toast.error(e.message));
   useEffect(() => { load(); }, []);
@@ -47,13 +56,28 @@ export default function AdminMembers() {
     } catch (e) { toast.error(e.message); }
   };
 
+  const submitFund = async () => {
+    if (!fundTarget) return;
+    try {
+      await api.post('/admin/fund', {
+        identifier: fundTarget.email,
+        amount: Number(fundAmount),
+        note: fundNote || undefined,
+      });
+      toast.success(`Funded ${fundTarget.first_name}'s wallet`);
+      setFundTarget(null); setFundAmount(''); setFundNote('');
+      load();
+    } catch (e) { toast.error(e.message); }
+  };
+
   const filtered = (users || []).filter((u) =>
     `${u.first_name} ${u.last_name} ${u.email} ${u.phone || ''}`
       .toLowerCase().includes(q.toLowerCase())
   );
 
   return (
-    <Card>
+    <>
+      <Card>
       <CardContent className="p-0">
         <div className="flex items-center gap-3 p-4 border-b">
           <div className="relative w-full max-w-sm">
@@ -176,14 +200,29 @@ export default function AdminMembers() {
                           <ShieldOff className="h-4 w-4" /> Demote to Member
                         </DropdownMenuItem>
                       )}
+                      <DropdownMenuItem onClick={() => { setFundTarget(u); setFundAmount(''); setFundNote(''); }}>
+                        <Wallet className="h-4 w-4" /> Fund Wallet
+                      </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </TableCell>
               </TableRow>
             ))}
           </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <Dialog open={!!fundTarget} onOpenChange={(v) => { if (!v) setFundTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Fund {fundTarget?.first_name} {fundTarget?.last_name}'s Wallet</DialogTitle>
+          </DialogHeader>
+          <div><Label>Amount (₦)</Label><Input type="number" min="1" value={fundAmount} onChange={(e) => setFundAmount(e.target.value)} placeholder="0.00" /></div>
+          <div><Label>Note (optional)</Label><Textarea rows={2} value={fundNote} onChange={(e) => setFundNote(e.target.value)} placeholder="Reason for funding…" /></div>
+          <DialogFooter><Button onClick={submitFund}>Confirm Funding</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

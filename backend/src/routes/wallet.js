@@ -2,6 +2,8 @@ import express from 'express';
 import { query, withTransaction } from '../db.js';
 import { authenticate } from '../middleware/auth.js';
 import { generateRef, isPositiveNumber, toMoney, asyncHandler, sendCsv } from '../utils/helpers.js';
+import { audit } from '../lib/audit.js';
+import { notify } from '../lib/notify.js';
 
 const router = express.Router();
 router.use(authenticate);
@@ -145,5 +147,99 @@ router.post('/withdraw', async (req, res) => {
     res.status(400).json({ message: e.message });
   }
 });
+
+// Look up a transfer recipient by email or 10-digit funding account number.
+router.get('/resolve-recipient', asyncHandler(async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (!q) return res.status(400).json({ message: 'Search value is required' });
+
+  let user = null;
+  if (/^\d{10}$/.test(q)) {
+    const va = await query(
+      `SELECT u.id, u.first_name, u.last_name, u.email, u.status
+       FROM virtual_accounts v JOIN users u ON u.id = v.user_id
+       WHERE v.account_number = $1`,
+      [q]
+    );
+    user = va.rows[0];
+  } else {
+    const u = await query(
+      'SELECT id, first_name, last_name, email, status FROM users WHERE email = $1',
+      [q.toLowerCase()]
+    );
+    user = u.rows[0];
+  }
+
+  if (!user) return res.status(404).json({ message: 'No member found' });
+  if (user.id === req.user.id) return res.status(400).json({ message: 'You cannot send to yourself' });
+  if (user.status !== 'active') return res.status(400).json({ message: 'Recipient account is not active' });
+  res.json({ id: user.id, name: `${user.first_name} ${user.last_name}`, email: user.email });
+}));
+
+// Member-to-member transfer (instant, no fee).
+router.post('/transfer', asyncHandler(async (req, res) => {
+  const { recipient, amount } = req.body;
+  if (!recipient) return res.status(400).json({ message: 'Recipient email or account number is required' });
+  if (!isPositiveNumber(amount)) return res.status(400).json({ message: 'Invalid amount' });
+  const amt = toMoney(amount);
+
+  let result;
+  try {
+    result = await withTransaction(async (client) => {
+    const q = String(recipient).trim();
+    let target = null;
+    if (/^\d{10}$/.test(q)) {
+      const va = await client.query(
+        'SELECT u.* FROM virtual_accounts v JOIN users u ON u.id = v.user_id WHERE v.account_number = $1',
+        [q]
+      );
+      target = va.rows[0];
+    } else {
+      const u = await client.query('SELECT * FROM users WHERE email = $1', [q.toLowerCase()]);
+      target = u.rows[0];
+    }
+    if (!target) throw new Error('Recipient not found');
+    if (target.id === req.user.id) throw new Error('You cannot send to yourself');
+    if (target.status !== 'active') throw new Error('Recipient account is not active');
+
+    const from = await client.query('SELECT * FROM wallets WHERE user_id = $1 FOR UPDATE', [req.user.id]);
+    if (!from.rows[0]) throw new Error('Wallet not found');
+    if (Number(from.rows[0].balance) < amt) throw new Error('Insufficient wallet balance');
+
+    const to = await client.query('SELECT * FROM wallets WHERE user_id = $1 FOR UPDATE', [target.id]);
+    if (!to.rows[0]) throw new Error('Recipient wallet not found');
+
+    const ref = generateRef('TRF');
+    const fromBalance = toMoney(Number(from.rows[0].balance) - amt);
+    const toBalance = toMoney(Number(to.rows[0].balance) + amt);
+    await client.query('UPDATE wallets SET balance = $1, updated_at = NOW() WHERE id = $2', [
+      fromBalance, from.rows[0].id,
+    ]);
+    await client.query('UPDATE wallets SET balance = $1, updated_at = NOW() WHERE id = $2', [
+      toBalance, to.rows[0].id,
+    ]);
+    await client.query(
+      `INSERT INTO transactions (user_id, wallet_id, type, amount, balance_after, reference, description)
+       VALUES ($1,$2,'transfer_out',$3,$4,$5,$6)`,
+      [req.user.id, from.rows[0].id, amt, fromBalance, ref, `Transfer to ${target.first_name} ${target.last_name}`]
+    );
+    await client.query(
+      `INSERT INTO transactions (user_id, wallet_id, type, amount, balance_after, reference, description)
+       VALUES ($1,$2,'transfer_in',$3,$4,$5,$6)`,
+      [target.id, to.rows[0].id, amt, toBalance, `${ref}-IN`, `Transfer from ${req.user.first_name} ${req.user.last_name}`]
+    );
+    await client.query(
+      `INSERT INTO notifications (user_id, title, body, link) VALUES ($1,$2,$3,$4)`,
+      [target.id, 'Money received', `${req.user.first_name} ${req.user.last_name} sent you ${amt} NGN.`, '/wallet']
+    );
+    return { reference: ref, recipient: `${target.first_name} ${target.last_name}`, amount: amt, balance: fromBalance };
+    });
+  } catch (e) {
+    return res.status(400).json({ message: e.message });
+  }
+
+  audit(req, 'wallet.transfer_sent', 'user', req.user.id, { reference: result.reference, amount: amt });
+  res.status(201).json(result);
+}));
 
 export default router;

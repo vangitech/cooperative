@@ -30,10 +30,10 @@ export function AuthProvider({ children }) {
   };
 
   const register = async (payload) => {
-    const { token, user } = await api.post('/auth/register', payload);
-    setToken(token);
-    setUser(user);
-    return user;
+    const data = await api.post('/auth/register', payload);
+    setToken(data.token);
+    setUser(data.user);
+    return data;
   };
 
   const logout = () => { clearToken(); setUser(null); };
