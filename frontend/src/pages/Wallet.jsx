@@ -38,6 +38,7 @@ export default function Wallet() {
   const [analytics, setAnalytics] = useState(null);
   const [months, setMonths] = useState(6);
   const [vaccount, setVaccount] = useState(null);
+  const [kycStatus, setKycStatus] = useState(null);
   const [sendOpen, setSendOpen] = useState(false);
   const [sendId, setSendId] = useState('');
   const [sendAmount, setSendAmount] = useState('');
@@ -77,6 +78,7 @@ export default function Wallet() {
     const [w, t] = await Promise.all([api.get('/wallet'), api.get('/wallet/transactions')]);
     setWallet(w); setTxs(t);
     api.get('/virtual-accounts/me').then(setVaccount).catch(() => setVaccount(null));
+    api.get('/kyc/me').then((d) => setKycStatus(d.profile?.status || null)).catch(() => setKycStatus(null));
   };
   useEffect(() => { load(); }, []);
 
@@ -277,6 +279,14 @@ export default function Wallet() {
                 <span className="text-sm text-muted-foreground">{vaccount.bank_name}</span>
                 <Button variant="outline" size="sm" onClick={copyAccount}>Copy</Button>
               </div>
+            ) : kycStatus === 'approved' ? (
+              <p className="text-sm text-muted-foreground mt-1">
+                ID verified — your funding account is being issued. If it doesn't appear soon, contact support.
+              </p>
+            ) : kycStatus === 'pending' ? (
+              <p className="text-sm text-muted-foreground mt-1">
+                Your ID is under review — the funding account arrives right after approval.
+              </p>
             ) : (
               <p className="text-sm text-muted-foreground mt-1">
                 No funding account yet —{' '}
