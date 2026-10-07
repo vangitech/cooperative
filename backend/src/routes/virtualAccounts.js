@@ -32,6 +32,10 @@ router.post(
       audit(req, 'virtual_account.assigned', 'virtual_account', account.id, { userId });
       res.status(201).json(account);
     } catch (e) {
+      if (e.code === '23505')
+        return res.status(409).json({
+          message: 'This account number is already assigned (test-mode mock numbers repeat — live keys issue unique numbers).',
+        });
       res.status(502).json({ message: `Assignment failed: ${e.message}` });
     }
   })
