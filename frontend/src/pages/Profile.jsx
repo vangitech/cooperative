@@ -20,6 +20,7 @@ const kycVariant = { pending: 'warning', approved: 'success', rejected: 'destruc
 
 function KycTab() {
   const [data, setData] = useState(null);
+  const [vaccount, setVaccount] = useState(null);
   const [form, setForm] = useState({
     dob: '', gender: '', occupation: '', employer: '', idType: 'nin', idNumber: '',
     residentialAddress: '', nextOfKinName: '', nextOfKinPhone: '', nextOfKinRelationship: '',
@@ -27,7 +28,10 @@ function KycTab() {
   const [g, setG] = useState({ fullName: '', phone: '', email: '', relationship: '' });
   const [msg, setMsg] = useState(null);
 
-  const load = () => api.get('/kyc/me').then(setData).catch((e) => setMsg({ type: 'err', text: e.message }));
+  const load = () => {
+    api.get('/kyc/me').then(setData).catch((e) => setMsg({ type: 'err', text: e.message }));
+    api.get('/virtual-accounts/me').then(setVaccount).catch(() => setVaccount(null));
+  };
   useEffect(() => { load(); }, []);
 
   const update = (k) => (e) => setForm({ ...form, [k]: e.target.value });
@@ -74,6 +78,12 @@ function KycTab() {
               <p><span className="text-muted-foreground">ID:</span> {ID_TYPES.find((t) => t.value === profile.id_type)?.label} — {profile.id_number}</p>
               <p><span className="text-muted-foreground">Next of kin:</span> {profile.next_of_kin_name} ({profile.next_of_kin_phone})</p>
               {profile.review_note && <p><span className="text-muted-foreground">Review note:</span> {profile.review_note}</p>}
+              {vaccount ? (
+                <p><span className="text-muted-foreground">Funding account:</span>{' '}
+                  <span className="font-mono font-semibold">{vaccount.account_number}</span> · {vaccount.bank_name}</p>
+              ) : (
+                <p className="text-muted-foreground">Funding account pending — an admin will assign it shortly.</p>
+              )}
             </div>
           ) : (
             <form onSubmit={submitProfile} className="space-y-4">
@@ -102,7 +112,7 @@ function KycTab() {
                     {ID_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
                   </select>
                 </div>
-                <div><Label>ID number</Label><Input required value={form.idNumber} onChange={update('idNumber')} /></div>
+                <div><Label>ID number</Label><Input required value={form.idNumber} onChange={(e) => setForm({ ...form, idNumber: form.idType === 'nin' ? e.target.value.replace(/\D/g, '') : e.target.value })} inputMode={form.idType === 'nin' ? 'numeric' : undefined} maxLength={form.idType === 'nin' ? 11 : undefined} placeholder={form.idType === 'nin' ? '11-digit NIN' : ''} /></div>
               </div>
               <div><Label>Residential address</Label><Textarea rows={2} value={form.residentialAddress} onChange={update('residentialAddress')} /></div>
               <div className="grid grid-cols-2 gap-3">

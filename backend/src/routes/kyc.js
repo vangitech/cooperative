@@ -24,6 +24,8 @@ router.post(
     if (!idType || !ID_TYPES.includes(idType))
       return res.status(400).json({ message: `ID type must be one of: ${ID_TYPES.join(', ')}` });
     if (!idNumber) return res.status(400).json({ message: 'ID number is required' });
+    if (idType === 'nin' && !/^\d{11}$/.test(String(idNumber).trim()))
+      return res.status(400).json({ message: 'NIN must be exactly 11 digits' });
     if (!nextOfKinName || !nextOfKinPhone)
       return res.status(400).json({ message: 'Next of kin name and phone are required' });
 
@@ -145,15 +147,20 @@ router.patch(
     // Approving a NIN-verified profile unlocks the static funding account
     // (live mode requires NIN/BVN). Awaited (not fire-and-forget) because
     // serverless functions may freeze before background work finishes.
+    // The outcome is returned so the admin UI can report it.
     let virtualAccount = null;
+    let accountError = null;
     if (status === 'approved' && rows[0].id_type === 'nin' && rows[0].id_number) {
       try {
         virtualAccount = await assignVirtualAccount(req.params.userId, { nin: rows[0].id_number });
       } catch (e) {
+        accountError = e.code === '23505'
+          ? 'Account number already assigned (test-mode mock numbers repeat — live keys issue unique numbers).'
+          : e.message;
         console.error('kyc-triggered account assignment failed:', e.message);
       }
     }
-    res.json({ ...rows[0], virtualAccount });
+    res.json({ ...rows[0], virtualAccount, accountError });
   })
 );
 

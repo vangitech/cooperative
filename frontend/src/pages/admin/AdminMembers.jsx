@@ -53,8 +53,18 @@ export default function AdminMembers() {
 
   const reviewKyc = async (u, status) => {
     try {
-      await api.patch(`/kyc/${u.id}`, { status });
-      toast.success(`KYC ${status} for ${u.first_name}`);
+      const r = await api.patch(`/kyc/${u.id}`, { status });
+      if (status === 'approved') {
+        if (r.virtualAccount) {
+          toast.success(`KYC approved — funding account ${r.virtualAccount.account_number} assigned`);
+        } else if (r.accountError) {
+          toast.warning(`KYC approved, but account setup failed: ${r.accountError}`);
+        } else {
+          toast.success(`KYC approved for ${u.first_name} (no NIN on file — assign account manually)`);
+        }
+      } else {
+        toast.success(`KYC rejected for ${u.first_name}`);
+      }
       load();
     } catch (e) { toast.error(e.message); }
   };
