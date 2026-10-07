@@ -11,6 +11,7 @@ import {
   listBanks,
   resolveAccount,
 } from '../lib/flutterwave.js';
+import { audit } from '../lib/audit.js';
 
 const router = express.Router();
 
@@ -160,6 +161,9 @@ router.get(
     const result = await withTransaction((client) =>
       creditFundIntent(client, intent.id, verification.data?.flw_ref)
     );
+    audit(req, 'wallet.funded_online', 'payment_intent', intent.id, {
+      txRef, amount: Number(intent.amount),
+    });
     res.json({ verified: true, ...result });
   })
 );
@@ -263,6 +267,9 @@ router.post(
       intent.id,
     ]);
 
+    audit(req, 'wallet.withdraw_bank', 'payment_intent', intent.id, {
+      reference: txRef, amount: amt,
+    });
     res.status(201).json({
       reference: txRef,
       transferId: transfer.data?.id || null,
@@ -354,6 +361,11 @@ router.post(
           if (flwOk(verification.data, intent)) {
             await withTransaction((client) =>
               creditFundIntent(client, intent.id, verification.data?.flw_ref)
+            );
+            audit(
+              { user: { id: intent.user_id }, ip: req.ip },
+              'wallet.funded_online', 'payment_intent', intent.id,
+              { txRef: intent.tx_ref, via: 'webhook' }
             );
           }
         }

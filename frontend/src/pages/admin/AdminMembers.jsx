@@ -39,6 +39,14 @@ export default function AdminMembers() {
     } catch (e) { toast.error(e.message); }
   };
 
+  const reviewKyc = async (u, status) => {
+    try {
+      await api.patch(`/kyc/${u.id}`, { status });
+      toast.success(`KYC ${status} for ${u.first_name}`);
+      load();
+    } catch (e) { toast.error(e.message); }
+  };
+
   const filtered = (users || []).filter((u) =>
     `${u.first_name} ${u.last_name} ${u.email} ${u.phone || ''}`
       .toLowerCase().includes(q.toLowerCase())
@@ -117,6 +125,11 @@ export default function AdminMembers() {
                   <Badge variant={u.status === 'active' ? 'success' : 'destructive'} className="capitalize">
                     {u.status}
                   </Badge>
+                  {u.kyc_status && (
+                    <Badge variant={u.kyc_status === 'approved' ? 'success' : u.kyc_status === 'pending' ? 'warning' : 'destructive'} className="capitalize ml-1">
+                      KYC: {u.kyc_status}
+                    </Badge>
+                  )}
                 </TableCell>
                 <TableCell>
                   <DropdownMenu>
@@ -137,6 +150,17 @@ export default function AdminMembers() {
                         <DropdownMenuItem onClick={() => changeStatus(u, 'active')}>
                           <UserCheck className="h-4 w-4" /> Activate
                         </DropdownMenuItem>
+                      )}
+                      {u.kyc_status === 'pending' && (
+                        <>
+                          <DropdownMenuItem onClick={() => reviewKyc(u, 'approved')}>
+                            <UserCheck className="h-4 w-4" /> Approve KYC
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="text-destructive focus:text-destructive"
+                                            onClick={() => reviewKyc(u, 'rejected')}>
+                            <UserX className="h-4 w-4" /> Reject KYC
+                          </DropdownMenuItem>
+                        </>
                       )}
                       {u.role === 'member' ? (
                         <DropdownMenuItem onClick={() => changeRole(u, 'admin')}>

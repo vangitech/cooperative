@@ -16,7 +16,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import {
   LayoutDashboard, Users, HandCoins, TrendingUp, Receipt,
-  Menu, Bell, LogOut, User as UserIcon, Shield, Home, Search,
+  Menu, Bell, LogOut, User as UserIcon, Shield, Home, Search, ScrollText,
 } from 'lucide-react';
 
 const adminNav = [
@@ -25,6 +25,7 @@ const adminNav = [
   { to: '/admin/loans',       label: 'Loans',        icon: HandCoins },
   { to: '/admin/dividends',   label: 'Dividends',    icon: TrendingUp },
   { to: '/admin/transactions', label: 'Transactions', icon: Receipt },
+  { to: '/admin/activity',    label: 'Activity Log', icon: ScrollText },
 ];
 
 const routeTitles = {
@@ -33,6 +34,7 @@ const routeTitles = {
   '/admin/loans': 'Loans',
   '/admin/dividends': 'Dividends',
   '/admin/transactions': 'Transactions',
+  '/admin/activity': 'Activity Log',
 };
 
 function SidebarContent({ onNavigate }) {

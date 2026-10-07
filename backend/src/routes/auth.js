@@ -4,6 +4,9 @@ import jwt from 'jsonwebtoken';
 import { query, withTransaction } from '../db.js';
 import { authenticate } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/helpers.js';
+import { audit, hashToken, newResetToken } from '../lib/audit.js';
+import { sendMail, appUrl } from '../lib/mailer.js';
+import { authLimiter, forgotLimiter } from '../lib/rateLimit.js';
 
 const router = express.Router();
 
@@ -12,7 +15,7 @@ const signToken = (user) =>
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   });
 
-router.post('/register', async (req, res) => {
+router.post('/register', authLimiter, async (req, res) => {
   try {
     const { firstName, lastName, email, password, phone, address } = req.body;
     if (!firstName || !lastName || !email || !password)
@@ -37,13 +40,14 @@ router.post('/register', async (req, res) => {
     });
 
     res.status(201).json({ token: signToken(user), user });
+    audit(req, 'auth.register', 'user', user.id, { email: user.email }, user.id);
   } catch (e) {
     console.error(e);
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-router.post('/login', async (req, res) => {
+router.post('/login', authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) return res.status(400).json({ message: 'Email and password required' });
@@ -60,6 +64,7 @@ router.post('/login', async (req, res) => {
 
     delete user.password_hash;
     res.json({ token: signToken(user), user });
+    audit(req, 'auth.login', 'user', user.id, {}, user.id);
   } catch (e) {
     console.error(e);
     res.status(500).json({ message: 'Server error' });
@@ -104,6 +109,76 @@ router.patch('/password', authenticate, asyncHandler(async (req, res) => {
   const hash = await bcrypt.hash(newPassword, 10);
   await query('UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2', [hash, req.user.id]);
   res.json({ message: 'Password updated' });
+  audit(req, 'auth.password_changed', 'user', req.user.id, {});
 }));
+
+// Request a password reset. Always responds 200 so emails can't be
+// enumerated; the link is single-use and expires after 60 minutes.
+router.post(
+  '/forgot-password',
+  forgotLimiter,
+  asyncHandler(async (req, res) => {
+    const { email } = req.body;
+    const done = () =>
+      res.json({ message: 'If an account exists for that email, a reset link has been sent.' });
+
+    if (!email) return done();
+    const { rows } = await query('SELECT id, first_name, email FROM users WHERE email = $1', [
+      email.toLowerCase(),
+    ]);
+    if (!rows[0]) return done();
+
+    const token = newResetToken();
+    await query(
+      `INSERT INTO password_resets (user_id, token_hash, expires_at)
+       VALUES ($1,$2,NOW() + INTERVAL '60 minutes')`,
+      [rows[0].id, hashToken(token)]
+    );
+
+    const link = `${appUrl()}/reset-password?token=${token}`;
+    await sendMail({
+      to: rows[0].email,
+      subject: 'Reset your MPCS password',
+      html: `<p>Hello ${rows[0].first_name || 'there'},</p>
+        <p>Someone requested a password reset for your MPCS account. Click the link below within 60 minutes:</p>
+        <p><a href="${link}">${link}</a></p>
+        <p>If you didn't request this, ignore this email — your password stays unchanged.</p>`,
+    }).catch((e) => console.error('reset mail failed:', e.message));
+
+    audit(req, 'auth.password_reset_requested', 'user', rows[0].id, {}, rows[0].id);
+    done();
+  })
+);
+
+// Consume a reset token and set a new password.
+router.post(
+  '/reset-password',
+  authLimiter,
+  asyncHandler(async (req, res) => {
+    const { token, newPassword } = req.body;
+    if (!token || !newPassword || newPassword.length < 6)
+      return res.status(400).json({ message: 'Valid token and a 6+ character password are required' });
+
+    const { rows } = await query(
+      `SELECT id, user_id FROM password_resets
+       WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()`,
+      [hashToken(String(token))]
+    );
+    const reset = rows[0];
+    if (!reset) return res.status(400).json({ message: 'Invalid or expired reset link' });
+
+    const userId = await withTransaction(async (client) => {
+      const hash = await bcrypt.hash(newPassword, 10);
+      await client.query('UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2', [
+        hash, reset.user_id,
+      ]);
+      await client.query('UPDATE password_resets SET used_at = NOW() WHERE id = $1', [reset.id]);
+      return reset.user_id;
+    });
+
+    audit(req, 'auth.password_reset_completed', 'user', userId, {}, userId);
+    res.json({ message: 'Password has been reset. You can now sign in.' });
+  })
+);
 
 export default router;

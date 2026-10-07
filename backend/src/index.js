@@ -10,6 +10,7 @@ import loanRoutes from './routes/loans.js';
 import dividendRoutes from './routes/dividends.js';
 import adminRoutes from './routes/admin.js';
 import paymentsRoutes from './routes/payments.js';
+import kycRoutes from './routes/kyc.js';
 
 for (const key of ['DATABASE_URL', 'JWT_SECRET']) {
   if (!process.env[key]) {
@@ -19,6 +20,7 @@ for (const key of ['DATABASE_URL', 'JWT_SECRET']) {
 }
 
 const app = express();
+app.set('trust proxy', 1); // correct req.ip behind Vercel / proxies
 
 app.use(cors({ origin: process.env.CLIENT_URL?.split(',') || '*' }));
 app.use(express.json());
@@ -32,6 +34,7 @@ app.use('/api/loans', loanRoutes);
 app.use('/api/dividends', dividendRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/payments', paymentsRoutes);
+app.use('/api/kyc', kycRoutes);
 
 // 404
 app.use((req, res) => res.status(404).json({ message: 'Route not found' }));

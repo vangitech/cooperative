@@ -101,3 +101,62 @@ CREATE TABLE IF NOT EXISTS payment_intents (
 
 CREATE INDEX IF NOT EXISTS idx_intents_user ON payment_intents(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_intents_txref ON payment_intents(tx_ref);
+
+CREATE TABLE IF NOT EXISTS password_resets (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash VARCHAR(128) UNIQUE NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_resets_token ON password_resets(token_hash);
+
+CREATE TABLE IF NOT EXISTS kyc_profiles (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  dob DATE,
+  gender VARCHAR(20),
+  occupation VARCHAR(120),
+  employer VARCHAR(160),
+  id_type VARCHAR(40), -- nin | drivers_license | voters_card | passport
+  id_number VARCHAR(80),
+  residential_address TEXT,
+  next_of_kin_name VARCHAR(160),
+  next_of_kin_phone VARCHAR(30),
+  next_of_kin_relationship VARCHAR(60),
+  status VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending|approved|rejected
+  review_note TEXT,
+  reviewed_by INTEGER REFERENCES users(id),
+  reviewed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS guarantors (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  full_name VARCHAR(160) NOT NULL,
+  phone VARCHAR(30) NOT NULL,
+  email VARCHAR(255),
+  relationship VARCHAR(60),
+  status VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending|confirmed
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(user_id, phone)
+);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id SERIAL PRIMARY KEY,
+  actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  action VARCHAR(80) NOT NULL,
+  entity VARCHAR(40),
+  entity_id VARCHAR(80),
+  metadata JSONB,
+  ip VARCHAR(64),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_time ON audit_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_logs(actor_id);
+CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_logs(entity, entity_id);

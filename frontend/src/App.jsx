@@ -7,6 +7,8 @@ import { Toaster } from '@/components/ui/sonner';
 
 import Login from '@/pages/Login';
 import Register from '@/pages/Register';
+import ForgotPassword from '@/pages/ForgotPassword';
+import ResetPassword from '@/pages/ResetPassword';
 import PaymentCallback from '@/pages/PaymentCallback';
 import Dashboard from '@/pages/Dashboard';
 import Wallet from '@/pages/Wallet';
@@ -20,6 +22,7 @@ import AdminMembers from '@/pages/admin/AdminMembers';
 import AdminLoans from '@/pages/admin/AdminLoans';
 import AdminDividends from '@/pages/admin/AdminDividends';
 import AdminTransactions from '@/pages/admin/AdminTransactions';
+import AdminActivity from '@/pages/admin/AdminActivity';
 
 export default function App() {
   return (
@@ -28,6 +31,8 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/payment/callback" element={<PaymentCallback />} />
 
           {/* Member portal */}
@@ -50,6 +55,7 @@ export default function App() {
             <Route path="loans" element={<AdminLoans />} />
             <Route path="dividends" element={<AdminDividends />} />
             <Route path="transactions" element={<AdminTransactions />} />
+            <Route path="activity" element={<AdminActivity />} />
           </Route>
 
           <Route path="/" element={<Navigate to="/dashboard" replace />} />

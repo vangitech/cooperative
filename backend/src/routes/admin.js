@@ -2,6 +2,7 @@ import express from 'express';
 import { query, withTransaction } from '../db.js';
 import { authenticate, requireAdmin } from '../middleware/auth.js';
 import { generateRef, toMoney, isPositiveNumber, asyncHandler } from '../utils/helpers.js';
+import { audit } from '../lib/audit.js';
 
 const router = express.Router();
 router.use(authenticate, requireAdmin);
@@ -37,8 +38,10 @@ router.get('/users', asyncHandler(async (req, res) => {
   const { rows } = await query(`
     SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.role, u.status, u.created_at,
            COALESCE(w.balance,0) AS balance,
-           (SELECT COALESCE(SUM(amount),0) FROM savings s WHERE s.user_id=u.id) AS total_savings
+           (SELECT COALESCE(SUM(amount),0) FROM savings s WHERE s.user_id=u.id) AS total_savings,
+           k.status AS kyc_status
     FROM users u LEFT JOIN wallets w ON w.user_id = u.id
+    LEFT JOIN kyc_profiles k ON k.user_id = u.id
     ORDER BY u.created_at DESC
   `);
   res.json(rows);
@@ -52,6 +55,8 @@ router.patch('/users/:id/status', asyncHandler(async (req, res) => {
     `UPDATE users SET status=$1, updated_at=NOW() WHERE id=$2 RETURNING id, status`,
     [status, req.params.id]
   );
+  if (!rows[0]) return res.status(404).json({ message: 'User not found' });
+  audit(req, `member.${status}`, 'user', req.params.id, {});
   res.json(rows[0]);
 }));
 
@@ -63,6 +68,8 @@ router.patch('/users/:id/role', asyncHandler(async (req, res) => {
     `UPDATE users SET role=$1, updated_at=NOW() WHERE id=$2 RETURNING id, role`,
     [role, req.params.id]
   );
+  if (!rows[0]) return res.status(404).json({ message: 'User not found' });
+  audit(req, `member.role_${role}`, 'user', req.params.id, {});
   res.json(rows[0]);
 }));
 
@@ -136,6 +143,7 @@ router.patch('/loans/:id', async (req, res) => {
       return r.rows[0];
     });
 
+    audit(req, `loan.${status}`, 'loan', result.id, { amount: Number(result.amount) });
     res.json(result);
   } catch (e) {
     res.status(400).json({ message: e.message });
@@ -185,6 +193,7 @@ router.post('/dividends', async (req, res) => {
       return out;
     });
 
+    audit(req, 'dividend.declared', 'dividend', null, { period, count: inserted.length });
     res.status(201).json({ count: inserted.length, dividends: inserted });
   } catch (e) {
     res.status(400).json({ message: e.message });
@@ -217,10 +226,36 @@ router.patch('/dividends/:id/pay', async (req, res) => {
       );
       return r.rows[0];
     });
+    audit(req, 'dividend.paid', 'dividend', result.id, { amount: Number(result.amount) });
     res.json(result);
   } catch (e) {
     res.status(400).json({ message: e.message });
   }
 });
+
+/* ---------- Audit log ---------- */
+router.get('/audit-logs', asyncHandler(async (req, res) => {
+  const { action, entity, limit } = req.query;
+  const conditions = [];
+  const params = [];
+  if (action) {
+    params.push(`%${action}%`);
+    conditions.push(`a.action ILIKE $${params.length}`);
+  }
+  if (entity) {
+    params.push(entity);
+    conditions.push(`a.entity = $${params.length}`);
+  }
+  const lim = Math.min(Number(limit) || 100, 500);
+  params.push(lim);
+  const { rows } = await query(
+    `SELECT a.*, u.first_name, u.last_name, u.email
+     FROM audit_logs a LEFT JOIN users u ON u.id = a.actor_id
+     ${conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''}
+     ORDER BY a.created_at DESC LIMIT $${params.length}`,
+    params
+  );
+  res.json(rows);
+}));
 
 export default router;
