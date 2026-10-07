@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
+import { useBalanceHidden, masked, BalanceEye } from '@/components/balance';
 import {
   ResponsiveContainer, AreaChart, Area, XAxis, YAxis,
   Tooltip as RTooltip, CartesianGrid, Legend,
@@ -39,6 +40,7 @@ export default function Wallet() {
   const [sendAmount, setSendAmount] = useState('');
   const [recipient, setRecipient] = useState(null);
   const [sendLoading, setSendLoading] = useState(false);
+  const [hidden, toggleHidden] = useBalanceHidden();
 
   // Auto-resolve the account holder's name once a full 10-digit
   // account number is entered AND a bank is selected.
@@ -160,8 +162,16 @@ export default function Wallet() {
       <Card className="bg-gradient-to-br from-primary to-emerald-700 text-primary-foreground border-0">
         <CardContent className="p-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <p className="text-sm opacity-80">Available Balance</p>
-            <p className="text-4xl font-bold mt-1">{formatCurrency(wallet?.balance)}</p>
+            <p className="text-sm opacity-80 flex items-center gap-1.5">
+              Available Balance
+              <BalanceEye hidden={hidden} onToggle={toggleHidden} className="text-primary-foreground hover:bg-white/10" />
+            </p>
+            <p className="text-4xl font-bold mt-1">{hidden ? masked() : formatCurrency(wallet?.balance)}</p>
+            {vaccount && (
+              <p className="text-sm opacity-80 mt-1 font-mono tracking-wider">
+                {vaccount.account_number} · {vaccount.bank_name}
+              </p>
+            )}
           </div>
           <div className="flex gap-2">
             <Dialog open={open === 'deposit'} onOpenChange={(v) => setOpen(v ? 'deposit' : null)}>

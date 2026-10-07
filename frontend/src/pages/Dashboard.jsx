@@ -5,9 +5,12 @@ import StatCard from '@/components/StatCard';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Wallet, PiggyBank, HandCoins, TrendingUp } from 'lucide-react';
+import { useBalanceHidden, masked, BalanceEye } from '@/components/balance';
 
 export default function Dashboard() {
   const [data, setData] = useState({ wallet: null, savings: null, loans: [], transactions: [], dividends: null });
+  const [vaccount, setVaccount] = useState(null);
+  const [hidden, toggleHidden] = useBalanceHidden();
 
   useEffect(() => {
     (async () => {
@@ -19,6 +22,7 @@ export default function Dashboard() {
         api.get('/dividends/summary'),
       ]);
       setData({ wallet, savings, loans, transactions, dividends });
+      api.get('/virtual-accounts/me').then(setVaccount).catch(() => setVaccount(null));
     })().catch(console.error);
   }, []);
 
@@ -27,7 +31,27 @@ export default function Dashboard() {
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard title="Wallet Balance" value={formatCurrency(data.wallet?.balance)} icon={Wallet} />
+        <Card>
+          <CardContent className="p-5 flex items-start justify-between">
+            <div className="min-w-0">
+              <p className="text-sm text-muted-foreground flex items-center gap-1.5">
+                Wallet Balance
+                <BalanceEye hidden={hidden} onToggle={toggleHidden} />
+              </p>
+              <p className="mt-1 text-2xl font-bold">
+                {hidden ? masked() : formatCurrency(data.wallet?.balance)}
+              </p>
+              {vaccount && (
+                <p className="mt-1 text-xs text-muted-foreground font-mono tracking-wider">
+                  {vaccount.account_number} · {vaccount.bank_name}
+                </p>
+              )}
+            </div>
+            <div className="p-2 rounded-lg bg-muted text-primary shrink-0">
+              <Wallet className="h-5 w-5" />
+            </div>
+          </CardContent>
+        </Card>
         <StatCard title="Total Savings" value={formatCurrency(data.savings?.total)} icon={PiggyBank}
           hint={`Today: ${formatCurrency(data.savings?.today)}`} />
         <StatCard title="Active Loans" value={activeLoans.length} icon={HandCoins}
