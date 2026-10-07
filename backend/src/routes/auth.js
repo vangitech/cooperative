@@ -18,11 +18,15 @@ const signToken = (user) =>
 
 router.post('/register', authLimiter, async (req, res) => {
   try {
-    const { firstName, lastName, email, password, phone, address } = req.body;
+    const { firstName, lastName, email, password, phone, address, nin, bvn } = req.body;
     if (!firstName || !lastName || !email || !password)
       return res.status(400).json({ message: 'First name, last name, email and password are required' });
     if (password.length < 6)
       return res.status(400).json({ message: 'Password must be at least 6 characters' });
+    for (const [label, val] of [['NIN', nin], ['BVN', bvn]]) {
+      if (val && !/^\d{11}$/.test(String(val).trim()))
+        return res.status(400).json({ message: `${label} must be 11 digits` });
+    }
 
     const exists = await query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
     if (exists.rows.length) return res.status(409).json({ message: 'Email already registered' });
@@ -41,10 +45,12 @@ router.post('/register', authLimiter, async (req, res) => {
     });
 
     // Funding account is best-effort: registration succeeds even if
-    // Flutterwave is unreachable (admin can retry assignment later).
+    // Flutterwave is unreachable. NIN/BVN (optional at signup, or from
+    // KYC later) unlocks immediate assignment; otherwise admin can retry.
     let virtualAccount = null;
     try {
-      virtualAccount = await assignVirtualAccount(user.id);
+      const clean = (v) => (v && /^\d{11}$/.test(String(v).trim()) ? String(v).trim() : undefined);
+      virtualAccount = await assignVirtualAccount(user.id, { nin: clean(nin), bvn: clean(bvn) });
     } catch (e) {
       console.error('virtual account deferred:', e.message);
     }

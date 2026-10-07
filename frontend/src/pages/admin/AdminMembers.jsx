@@ -14,7 +14,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { MoreHorizontal, Search, UserX, UserCheck, Shield, ShieldOff, Wallet } from 'lucide-react';
+import { MoreHorizontal, Search, UserX, UserCheck, Shield, ShieldOff, Wallet, Landmark } from 'lucide-react';
 import {
   Dialog, DialogContent, DialogFooter,
   DialogHeader, DialogTitle,
@@ -28,6 +28,9 @@ export default function AdminMembers() {
   const [fundTarget, setFundTarget] = useState(null);
   const [fundAmount, setFundAmount] = useState('');
   const [fundNote, setFundNote] = useState('');
+  const [assignTarget, setAssignTarget] = useState(null);
+  const [assignNin, setAssignNin] = useState('');
+  const [assignBvn, setAssignBvn] = useState('');
 
   const load = () => api.get('/admin/users').then(setUsers).catch((e) => toast.error(e.message));
   useEffect(() => { load(); }, []);
@@ -70,6 +73,21 @@ export default function AdminMembers() {
     } catch (e) { toast.error(e.message); }
   };
 
+  const submitAssign = async () => {
+    if (!assignTarget) return;
+    const clean = (v) => (/^\d{11}$/.test(v.trim()) ? v.trim() : undefined);
+    try {
+      await api.post('/virtual-accounts/assign', {
+        userId: assignTarget.id,
+        nin: clean(assignNin),
+        bvn: clean(assignBvn),
+      });
+      toast.success(`Funding account assigned to ${assignTarget.first_name}`);
+      setAssignTarget(null); setAssignNin(''); setAssignBvn('');
+      load();
+    } catch (e) { toast.error(e.message); }
+  };
+
   const filtered = (users || []).filter((u) =>
     `${u.first_name} ${u.last_name} ${u.email} ${u.phone || ''}`
       .toLowerCase().includes(q.toLowerCase())
@@ -95,9 +113,10 @@ export default function AdminMembers() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Member</TableHead>
-              <TableHead>Contact</TableHead>
-              <TableHead className="hidden md:table-cell">Joined</TableHead>
+                <TableHead>Member</TableHead>
+                <TableHead>Contact</TableHead>
+                <TableHead className="hidden md:table-cell">Funding Acct</TableHead>
+                <TableHead className="hidden md:table-cell">Joined</TableHead>
               <TableHead className="text-right">Wallet</TableHead>
               <TableHead className="text-right hidden lg:table-cell">Savings</TableHead>
               <TableHead>Role</TableHead>
@@ -109,14 +128,14 @@ export default function AdminMembers() {
             {!users ? (
               Array.from({ length: 6 }).map((_, i) => (
                 <TableRow key={i}>
-                  {Array.from({ length: 8 }).map((__, j) => (
+                  {Array.from({ length: 9 }).map((__, j) => (
                     <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>
                   ))}
                 </TableRow>
               ))
             ) : filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-center text-muted-foreground py-10">
+                <TableCell colSpan={9} className="text-center text-muted-foreground py-10">
                   No members found
                 </TableCell>
               </TableRow>
@@ -136,6 +155,9 @@ export default function AdminMembers() {
                   </div>
                 </TableCell>
                 <TableCell className="text-sm">{u.phone || '—'}</TableCell>
+                <TableCell className="hidden md:table-cell text-sm font-mono">
+                  {u.funding_account || <span className="text-muted-foreground">—</span>}
+                </TableCell>
                 <TableCell className="hidden md:table-cell text-sm text-muted-foreground">
                   {formatDate(u.created_at)}
                 </TableCell>
@@ -203,6 +225,11 @@ export default function AdminMembers() {
                       <DropdownMenuItem onClick={() => { setFundTarget(u); setFundAmount(''); setFundNote(''); }}>
                         <Wallet className="h-4 w-4" /> Fund Wallet
                       </DropdownMenuItem>
+                      {!u.funding_account && (
+                        <DropdownMenuItem onClick={() => { setAssignTarget(u); setAssignNin(''); setAssignBvn(''); }}>
+                          <Landmark className="h-4 w-4" /> Assign Funding Acct
+                        </DropdownMenuItem>
+                      )}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </TableCell>
@@ -221,6 +248,21 @@ export default function AdminMembers() {
           <div><Label>Amount (₦)</Label><Input type="number" min="1" value={fundAmount} onChange={(e) => setFundAmount(e.target.value)} placeholder="0.00" /></div>
           <div><Label>Note (optional)</Label><Textarea rows={2} value={fundNote} onChange={(e) => setFundNote(e.target.value)} placeholder="Reason for funding…" /></div>
           <DialogFooter><Button onClick={submitFund}>Confirm Funding</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!assignTarget} onOpenChange={(v) => { if (!v) setAssignTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Assign Funding Account</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            For {assignTarget?.first_name} {assignTarget?.last_name} ({assignTarget?.email}).
+            Static accounts need NIN or BVN — provide at least one.
+          </p>
+          <div><Label>NIN (11 digits, optional)</Label><Input inputMode="numeric" maxLength={11} value={assignNin} onChange={(e) => setAssignNin(e.target.value.replace(/\D/g, ''))} /></div>
+          <div><Label>BVN (11 digits, optional)</Label><Input inputMode="numeric" maxLength={11} value={assignBvn} onChange={(e) => setAssignBvn(e.target.value.replace(/\D/g, ''))} /></div>
+          <DialogFooter><Button onClick={submitAssign}>Assign Account</Button></DialogFooter>
         </DialogContent>
       </Dialog>
     </>

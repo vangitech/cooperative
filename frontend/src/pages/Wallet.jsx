@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api, download } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
 import { formatCurrency, formatDateTime } from '@/lib/format';
@@ -277,7 +278,13 @@ export default function Wallet() {
                 <Button variant="outline" size="sm" onClick={copyAccount}>Copy</Button>
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground mt-1">Your personal account is being set up…</p>
+              <p className="text-sm text-muted-foreground mt-1">
+                No funding account yet —{' '}
+                <Link to="/profile" className="text-primary font-medium hover:underline">
+                  verify your ID (NIN) in Profile → KYC
+                </Link>{' '}
+                to activate it.
+              </p>
             )}
           </div>
           <Dialog open={sendOpen} onOpenChange={(v) => {

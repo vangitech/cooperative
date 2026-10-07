@@ -45,9 +45,11 @@ router.get('/users', asyncHandler(async (req, res) => {
     SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.role, u.status, u.created_at,
            COALESCE(w.balance,0) AS balance,
            (SELECT COALESCE(SUM(amount),0) FROM savings s WHERE s.user_id=u.id) AS total_savings,
-           k.status AS kyc_status
+           k.status AS kyc_status,
+           v.account_number AS funding_account, v.bank_name AS funding_bank
     FROM users u LEFT JOIN wallets w ON w.user_id = u.id
     LEFT JOIN kyc_profiles k ON k.user_id = u.id
+    LEFT JOIN virtual_accounts v ON v.user_id = u.id
     ORDER BY u.created_at DESC
   `);
   res.json(rows);

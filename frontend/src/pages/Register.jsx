@@ -11,7 +11,7 @@ export default function Register() {
   const { register, logout } = useAuth();
   const navigate = useNavigate();
   const [form, setForm] = useState({
-    firstName: '', lastName: '', email: '', password: '', phone: '', address: '',
+    firstName: '', lastName: '', email: '', password: '', phone: '', address: '', nin: '',
   });
   const [error, setError] = useState('');
   const [pending, setPending] = useState(null); // { virtualAccount } on approval-pending signup
@@ -90,6 +90,11 @@ export default function Register() {
               <div><Label>Phone</Label><Input value={form.phone} onChange={update('phone')} /></div>
               <div><Label>Address</Label><Textarea rows={2} value={form.address} onChange={update('address')} /></div>
               <div><Label>Password</Label><Input type="password" required value={form.password} onChange={update('password')} placeholder="Min 6 characters" /></div>
+              <div>
+                <Label>NIN (optional)</Label>
+                <Input inputMode="numeric" maxLength={11} value={form.nin} onChange={(e) => setForm({ ...form, nin: e.target.value.replace(/\D/g, '') })} placeholder="11-digit NIN for instant funding account" />
+                <p className="text-xs text-muted-foreground mt-1">Provide your NIN to get your personal funding account number immediately. Otherwise it is set up after ID verification.</p>
+              </div>
               <Button type="submit" className="w-full" disabled={loading}>
                 {loading ? 'Creating account…' : 'Create account'}
               </Button>
