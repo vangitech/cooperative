@@ -1,6 +1,6 @@
 import express from 'express';
 import { query } from '../db.js';
-import { authenticate, requireAdmin } from '../middleware/auth.js';
+import { authenticate, requirePerm } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/helpers.js';
 import { audit } from '../lib/audit.js';
 import { notify } from '../lib/notify.js';
@@ -104,7 +104,7 @@ router.post(
 router.get(
   '/',
   authenticate,
-  requireAdmin,
+  requirePerm('kyc.review'),
   asyncHandler(async (req, res) => {
     const { status } = req.query;
     const params = [];
@@ -126,7 +126,7 @@ router.get(
 router.patch(
   '/:userId',
   authenticate,
-  requireAdmin,
+  requirePerm('kyc.review'),
   asyncHandler(async (req, res) => {
     const { status, note } = req.body;
     if (!['approved', 'rejected'].includes(status))

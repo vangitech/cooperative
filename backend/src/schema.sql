@@ -238,6 +238,30 @@ CREATE TABLE IF NOT EXISTS notifications (
 
 CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS announcements (
+  id SERIAL PRIMARY KEY,
+  title VARCHAR(200) NOT NULL,
+  body TEXT NOT NULL,
+  audience VARCHAR(20) NOT NULL DEFAULT 'all', -- all|members|staff
+  published_by INTEGER REFERENCES users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS savings_plans (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  amount NUMERIC(15,2) NOT NULL,
+  day_of_month INTEGER NOT NULL CHECK (day_of_month BETWEEN 1 AND 28),
+  savings_type VARCHAR(30) NOT NULL DEFAULT 'monthly',
+  note TEXT,
+  status VARCHAR(20) NOT NULL DEFAULT 'active', -- active|paused|cancelled
+  last_run TIMESTAMPTZ,
+  next_run DATE NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_plans_due ON savings_plans(status, next_run);
+
 CREATE TABLE IF NOT EXISTS store_products (
   id SERIAL PRIMARY KEY,
   name VARCHAR(160) NOT NULL,

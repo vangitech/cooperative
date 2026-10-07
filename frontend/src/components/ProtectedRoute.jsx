@@ -29,7 +29,10 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
       </div>
     );
 
-  if (adminOnly && user.role !== 'admin') return <Navigate to="/dashboard" replace />;
+  // Staff console: full admins plus officers and accountants (each sees
+  // only the sections their permissions allow).
+  if (adminOnly && !['admin', 'officer', 'accountant'].includes(user.role))
+    return <Navigate to="/dashboard" replace />;
 
   return children;
 }

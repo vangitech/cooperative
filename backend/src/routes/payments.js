@@ -14,6 +14,7 @@ import {
 import { audit } from '../lib/audit.js';
 import { notify } from '../lib/notify.js';
 import { settleDueCollections } from '../lib/collections.js';
+import { runDuePlans } from '../lib/plans.js';
 
 const router = express.Router();
 
@@ -202,6 +203,7 @@ router.get(
       txRef, amount: Number(intent.amount),
     });
     await settleDueCollections(withTransaction, intent.user_id);
+    await runDuePlans();
     res.json({ verified: true, ...result });
   })
 );
@@ -439,6 +441,7 @@ router.post(
                   { amount: Number(v.amount), via: 'webhook' }
                 );
                 await settleDueCollections(withTransaction, account.user_id);
+                await runDuePlans();
               }
             }
           }

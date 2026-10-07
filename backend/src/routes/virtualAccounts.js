@@ -1,6 +1,6 @@
 import express from 'express';
 import { query } from '../db.js';
-import { authenticate, requireAdmin } from '../middleware/auth.js';
+import { authenticate, requirePerm } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/helpers.js';
 import { audit } from '../lib/audit.js';
 import { assignVirtualAccount } from '../lib/virtualAccounts.js';
@@ -22,7 +22,7 @@ router.get(
 router.post(
   '/assign',
   authenticate,
-  requireAdmin,
+  requirePerm('members.review'),
   asyncHandler(async (req, res) => {
     const { userId, bvn, nin } = req.body;
     if (!userId) return res.status(400).json({ message: 'userId is required' });

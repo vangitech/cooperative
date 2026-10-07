@@ -4,12 +4,13 @@ import { formatCurrency, formatDateTime } from '@/lib/format';
 import StatCard from '@/components/StatCard';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Wallet, PiggyBank, HandCoins, TrendingUp } from 'lucide-react';
+import { Wallet, PiggyBank, HandCoins, TrendingUp, Megaphone } from 'lucide-react';
 import { useBalanceHidden, masked, BalanceEye } from '@/components/balance';
 
 export default function Dashboard() {
   const [data, setData] = useState({ wallet: null, savings: null, loans: [], transactions: [], dividends: null });
   const [vaccount, setVaccount] = useState(null);
+  const [notices, setNotices] = useState([]);
   const [hidden, toggleHidden] = useBalanceHidden();
 
   useEffect(() => {
@@ -23,6 +24,7 @@ export default function Dashboard() {
       ]);
       setData({ wallet, savings, loans, transactions, dividends });
       api.get('/virtual-accounts/me').then(setVaccount).catch(() => setVaccount(null));
+      api.get('/announcements').then((n) => setNotices(n.slice(0, 3))).catch(() => setNotices([]));
     })().catch(console.error);
   }, []);
 
@@ -59,9 +61,26 @@ export default function Dashboard() {
         <StatCard title="Dividends Earned" value={formatCurrency(data.dividends?.total_paid)} icon={TrendingUp} />
       </div>
 
+      {notices.length > 0 && (
+        <Card className="border-primary/30">
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <Megaphone className="h-4 w-4 text-primary" /> Notices
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {notices.map((n) => (
+              <div key={n.id} className="border-l-2 border-primary pl-3">
+                <p className="text-sm font-medium">{n.title}</p>
+                <p className="text-sm text-muted-foreground line-clamp-2">{n.body}</p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
-        <CardHeader><CardTitle>Recent Transactions</CardTitle></CardHeader>
-        <CardContent className="p-0">
+        <CardHeader><CardTitle>Recent Transactions</CardTitle></CardHeader>        <CardContent className="p-0">
           {data.transactions.length === 0 ? (
             <p className="p-6 text-sm text-muted-foreground">No transactions yet.</p>
           ) : (

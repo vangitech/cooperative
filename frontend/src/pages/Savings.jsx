@@ -22,6 +22,8 @@ export default function Savings() {
   const [rates, setRates] = useState([]);
   const [fds, setFds] = useState([]);
   const [fdForm, setFdForm] = useState({ amount: '', tenureMonths: '' });
+  const [plans, setPlans] = useState([]);
+  const [planForm, setPlanForm] = useState({ amount: '', dayOfMonth: '1' });
 
   const load = async () => {
     const [s, l] = await Promise.all([api.get('/savings/summary'), api.get('/savings')]);
@@ -34,7 +36,8 @@ export default function Savings() {
     ]);
     setRates(r); setFds(m);
   };
-  useEffect(() => { load(); loadFd(); }, []);
+  const loadPlans = () => api.get('/plans/mine').then(setPlans).catch(() => setPlans([]));
+  useEffect(() => { load(); loadFd(); loadPlans(); }, []);
 
   const submit = async (e) => {
     e.preventDefault(); setMsg(null); setSaving(true);
@@ -74,6 +77,23 @@ export default function Savings() {
     } catch (e) { setMsg({ type: 'err', text: e.message }); }
   };
 
+  const createPlan = async (e) => {
+    e.preventDefault(); setMsg(null);
+    try {
+      await api.post('/plans', { amount: Number(planForm.amount), dayOfMonth: Number(planForm.dayOfMonth) });
+      setPlanForm({ amount: '', dayOfMonth: '1' });
+      await loadPlans();
+      setMsg({ type: 'ok', text: 'Recurring plan created — runs automatically each month.' });
+    } catch (e) { setMsg({ type: 'err', text: e.message }); }
+  };
+
+  const setPlanStatus = async (id, status) => {
+    try {
+      await api.patch(`/plans/${id}`, { status });
+      await loadPlans();
+    } catch (e) { setMsg({ type: 'err', text: e.message }); }
+  };
+
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -82,6 +102,66 @@ export default function Savings() {
         <StatCard title="This Month" value={formatCurrency(summary?.this_month)} icon={CalendarClock} />
         <StatCard title="Total Savings" value={formatCurrency(summary?.total)} icon={PiggyBank} hint={`${summary?.count || 0} deposits`} />
       </div>
+
+      {msg && (
+        <div className={`text-sm p-3 rounded-md ${msg.type === 'ok' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+          {msg.text}
+        </div>
+      )}
+
+      <Card>
+        <CardHeader><CardTitle>Recurring Plans</CardTitle></CardHeader>
+        <CardContent>
+          {msg && (
+            <div className={`text-sm p-3 rounded-md mb-4 ${msg.type === 'ok' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+              {msg.text}
+            </div>
+          )}
+          <div className="grid gap-6 lg:grid-cols-3">
+            <form onSubmit={createPlan} className="space-y-4">
+              <div><Label>Amount per month</Label><Input type="number" min="1" required value={planForm.amount} onChange={(e) => setPlanForm({ ...planForm, amount: e.target.value })} placeholder="0.00" /></div>
+              <div>
+                <Label>Debit day</Label>
+                <Select value={String(planForm.dayOfMonth)} onValueChange={(v) => setPlanForm({ ...planForm, dayOfMonth: v })}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: 28 }, (_, i) => (
+                      <SelectItem key={i + 1} value={String(i + 1)}>Day {i + 1}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <p className="text-xs text-muted-foreground">Debited from your wallet each month when funded. Top up to stay on track.</p>
+              <Button type="submit" className="w-full">Create Plan</Button>
+            </form>
+            <div className="lg:col-span-2 space-y-3">
+              {plans.map((p) => (
+                <div key={p.id} className="flex flex-wrap items-center gap-3 border rounded-md px-3 py-2.5 text-sm">
+                  <div className="flex-1 min-w-40">
+                    <p className="font-semibold">{formatCurrency(p.amount)} / month</p>
+                    <p className="text-muted-foreground text-xs">
+                      Day {p.day_of_month} · next {formatDate(p.next_run)}
+                      {p.last_run && ` · last ${formatDate(p.last_run)}`}
+                    </p>
+                  </div>
+                  <Badge variant={p.status === 'active' ? 'success' : 'outline'} className="capitalize">{p.status}</Badge>
+                  {p.status === 'active' ? (
+                    <Button size="sm" variant="outline" onClick={() => setPlanStatus(p.id, 'paused')}>Pause</Button>
+                  ) : p.status === 'paused' ? (
+                    <Button size="sm" variant="outline" onClick={() => setPlanStatus(p.id, 'active')}>Resume</Button>
+                  ) : null}
+                  {p.status !== 'cancelled' && (
+                    <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setPlanStatus(p.id, 'cancelled')}>Cancel</Button>
+                  )}
+                </div>
+              ))}
+              {plans.length === 0 && (
+                <p className="text-sm text-muted-foreground text-center py-6">No recurring plans — create one to save automatically.</p>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-1">

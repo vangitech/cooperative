@@ -16,17 +16,18 @@ import {
 } from '@/components/ui/dropdown-menu';
 import {
   LayoutDashboard, Users, HandCoins, TrendingUp, Receipt,
-  Menu, Bell, LogOut, User as UserIcon, Shield, Home, Search, ScrollText, Store,
+  Menu, Bell, LogOut, User as UserIcon, Shield, Home, Search, ScrollText, Store, Megaphone,
 } from 'lucide-react';
 
 const adminNav = [
-  { to: '/admin',             label: 'Overview',     icon: LayoutDashboard, exact: true },
-  { to: '/admin/members',     label: 'Members',      icon: Users },
-  { to: '/admin/loans',       label: 'Loans',        icon: HandCoins },
-  { to: '/admin/store',       label: 'Store',        icon: Store },
-  { to: '/admin/dividends',   label: 'Dividends',    icon: TrendingUp },
-  { to: '/admin/transactions', label: 'Transactions', icon: Receipt },
-  { to: '/admin/activity',    label: 'Activity Log', icon: ScrollText },
+  { to: '/admin',             label: 'Overview',     icon: LayoutDashboard, exact: true, roles: ['admin', 'officer', 'accountant'] },
+  { to: '/admin/members',     label: 'Members',      icon: Users, roles: ['admin', 'officer', 'accountant'] },
+  { to: '/admin/loans',       label: 'Loans',        icon: HandCoins, roles: ['admin', 'officer', 'accountant'] },
+  { to: '/admin/store',       label: 'Store',        icon: Store, roles: ['admin', 'officer'] },
+  { to: '/admin/dividends',   label: 'Dividends',    icon: TrendingUp, roles: ['admin', 'accountant'] },
+  { to: '/admin/transactions', label: 'Transactions', icon: Receipt, roles: ['admin', 'accountant'] },
+  { to: '/admin/activity',    label: 'Activity Log', icon: ScrollText, roles: ['admin', 'officer', 'accountant'] },
+  { to: '/admin/notices',     label: 'Notices',      icon: Megaphone, roles: ['admin', 'officer'] },
 ];
 
 const routeTitles = {
@@ -37,9 +38,11 @@ const routeTitles = {
   '/admin/dividends': 'Dividends',
   '/admin/transactions': 'Transactions',
   '/admin/activity': 'Activity Log',
+  '/admin/notices': 'Notices',
 };
 
-function SidebarContent({ onNavigate }) {
+function SidebarContent({ onNavigate, role }) {
+  const items = adminNav.filter((n) => !n.roles || n.roles.includes(role));
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
       {/* Brand */}
@@ -59,7 +62,7 @@ function SidebarContent({ onNavigate }) {
           <p className="px-3 py-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
             Management
           </p>
-          {adminNav.map(({ to, label, icon: Icon, exact }) => (
+          {items.map(({ to, label, icon: Icon, exact }) => (
             <NavLink
               key={to} to={to} end={exact}
               onClick={onNavigate}
@@ -113,7 +116,7 @@ export default function AdminLayout() {
       <div className="min-h-screen flex bg-muted/30">
         {/* Desktop sidebar */}
         <aside className="hidden md:flex w-64 shrink-0 border-r bg-sidebar">
-          <SidebarContent />
+          <SidebarContent role={user?.role} />
         </aside>
 
         <div className="flex-1 flex flex-col min-w-0">
@@ -128,7 +131,7 @@ export default function AdminLayout() {
                   </Button>
                 </SheetTrigger>
                 <SheetContent side="left" className="p-0 w-72 bg-sidebar">
-                  <SidebarContent onNavigate={() => setMobileOpen(false)} />
+                  <SidebarContent role={user?.role} onNavigate={() => setMobileOpen(false)} />
                 </SheetContent>
               </Sheet>
 

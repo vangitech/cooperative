@@ -5,6 +5,7 @@ import { generateRef, isPositiveNumber, toMoney, asyncHandler, sendCsv } from '.
 import { audit } from '../lib/audit.js';
 import { notify } from '../lib/notify.js';
 import { settleDueCollections } from '../lib/collections.js';
+import { runDuePlans } from '../lib/plans.js';
 
 const router = express.Router();
 router.use(authenticate);
@@ -241,6 +242,7 @@ router.post('/transfer', asyncHandler(async (req, res) => {
 
   audit(req, 'wallet.transfer_sent', 'user', req.user.id, { reference: result.reference, amount: amt });
   await settleDueCollections(withTransaction, result.recipientId);
+  await runDuePlans();
   res.status(201).json(result);
 }));
 

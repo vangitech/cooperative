@@ -1,17 +1,19 @@
 import express from 'express';
 import { query, withTransaction } from '../db.js';
-import { authenticate, requireAdmin } from '../middleware/auth.js';
+import { authenticate, requirePerm } from '../middleware/auth.js';
 import { generateRef, toMoney, isPositiveNumber, asyncHandler, sendCsv } from '../utils/helpers.js';
 import { audit } from '../lib/audit.js';
 import { ensureSchedules } from '../lib/loans.js';
 import { notify } from '../lib/notify.js';
 import { settleDueCollections } from '../lib/collections.js';
+import { runDuePlans } from '../lib/plans.js';
+import { ALL_ROLES } from '../lib/permissions.js';
 
 const router = express.Router();
-router.use(authenticate, requireAdmin);
+router.use(authenticate);
 
 /* ---------- Stats ---------- */
-router.get('/stats', asyncHandler(async (req, res) => {
+router.get('/stats', requirePerm('overview.read'), asyncHandler(async (req, res) => {
   const stats = await query(`
     SELECT
       (SELECT COUNT(*) FROM users WHERE role='member') AS total_members,
@@ -40,7 +42,7 @@ router.get('/stats', asyncHandler(async (req, res) => {
 }));
 
 /* ---------- Members ---------- */
-router.get('/users', asyncHandler(async (req, res) => {
+router.get('/users', requirePerm('members.read'), asyncHandler(async (req, res) => {
   const { rows } = await query(`
     SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.role, u.status, u.created_at,
            COALESCE(w.balance,0) AS balance,
@@ -55,10 +57,12 @@ router.get('/users', asyncHandler(async (req, res) => {
   res.json(rows);
 }));
 
-router.patch('/users/:id/status', asyncHandler(async (req, res) => {
+router.patch('/users/:id/status', requirePerm('members.review'), asyncHandler(async (req, res) => {
   const { status } = req.body;
   if (!['active', 'suspended'].includes(status))
     return res.status(400).json({ message: 'Invalid status' });
+  if (String(req.params.id) === String(req.user.id))
+    return res.status(400).json({ message: 'You cannot change your own status' });
   const { rows } = await query(
     `UPDATE users SET status=$1, updated_at=NOW() WHERE id=$2 RETURNING id, status`,
     [status, req.params.id]
@@ -75,10 +79,12 @@ router.patch('/users/:id/status', asyncHandler(async (req, res) => {
   res.json(rows[0]);
 }));
 
-router.patch('/users/:id/role', asyncHandler(async (req, res) => {
+router.patch('/users/:id/role', requirePerm('*'), asyncHandler(async (req, res) => {
   const { role } = req.body;
-  if (!['member', 'admin'].includes(role))
-    return res.status(400).json({ message: 'Invalid role' });
+  if (!ALL_ROLES.includes(role))
+    return res.status(400).json({ message: `Invalid role (one of: ${ALL_ROLES.join(', ')})` });
+  if (String(req.params.id) === String(req.user.id))
+    return res.status(400).json({ message: 'You cannot change your own role' });
   const { rows } = await query(
     `UPDATE users SET role=$1, updated_at=NOW() WHERE id=$2 RETURNING id, role`,
     [role, req.params.id]
@@ -89,7 +95,7 @@ router.patch('/users/:id/role', asyncHandler(async (req, res) => {
 }));
 
 /* ---------- Transactions ---------- */
-router.get('/transactions', asyncHandler(async (req, res) => {
+router.get('/transactions', requirePerm('transactions.read'), asyncHandler(async (req, res) => {
   const { rows } = await query(`
     SELECT t.*, u.first_name, u.last_name, u.email
     FROM transactions t JOIN users u ON u.id = t.user_id
@@ -99,7 +105,7 @@ router.get('/transactions', asyncHandler(async (req, res) => {
 }));
 
 /* ---------- Savings ---------- */
-router.get('/savings', asyncHandler(async (req, res) => {
+router.get('/savings', requirePerm('savings.read'), asyncHandler(async (req, res) => {
   const { rows } = await query(`
     SELECT s.*, u.first_name, u.last_name, u.email
     FROM savings s JOIN users u ON u.id = s.user_id
@@ -109,7 +115,7 @@ router.get('/savings', asyncHandler(async (req, res) => {
 }));
 
 /* ---------- Loans ---------- */
-router.get('/loans', asyncHandler(async (req, res) => {
+router.get('/loans', requirePerm('loans.read'), asyncHandler(async (req, res) => {
   const { rows } = await query(`
     SELECT l.*, u.first_name, u.last_name, u.email
     FROM loans l JOIN users u ON u.id = l.user_id
@@ -118,7 +124,7 @@ router.get('/loans', asyncHandler(async (req, res) => {
   res.json(rows);
 }));
 
-router.patch('/loans/:id', async (req, res) => {
+router.patch('/loans/:id', requirePerm('loans.review'), async (req, res) => {
   try {
     const { status, note } = req.body;
     if (!['approved', 'rejected'].includes(status))
@@ -170,7 +176,7 @@ router.patch('/loans/:id', async (req, res) => {
 });
 
 /* ---------- Dividends ---------- */
-router.get('/dividends', asyncHandler(async (req, res) => {
+router.get('/dividends', requirePerm('dividends.manage'), asyncHandler(async (req, res) => {
   const { rows } = await query(`
     SELECT d.*, u.first_name, u.last_name, u.email
     FROM dividends d JOIN users u ON u.id = d.user_id
@@ -181,7 +187,7 @@ router.get('/dividends', asyncHandler(async (req, res) => {
 
 // Declare a dividend. If totalAmount provided → distributed equally among active members.
 // If userId + amount provided → single member.
-router.post('/dividends', async (req, res) => {
+router.post('/dividends', requirePerm('dividends.manage'), async (req, res) => {
   try {
     const { period, totalAmount, userId, amount } = req.body;
     if (!period) return res.status(400).json({ message: 'Period is required (e.g. "2025 Q1")' });
@@ -226,7 +232,7 @@ router.post('/dividends', async (req, res) => {
   }
 });
 
-router.patch('/dividends/:id/pay', async (req, res) => {
+router.patch('/dividends/:id/pay', requirePerm('dividends.manage'), async (req, res) => {
   try {
     const result = await withTransaction(async (client) => {
       const d = await client.query('SELECT * FROM dividends WHERE id=$1 FOR UPDATE', [req.params.id]);
@@ -259,6 +265,7 @@ router.patch('/dividends/:id/pay', async (req, res) => {
       link: '/dividends',
     });
     await settleDueCollections(withTransaction, result.user_id);
+    await runDuePlans();
     res.json(result);
   } catch (e) {
     res.status(400).json({ message: e.message });
@@ -266,12 +273,12 @@ router.patch('/dividends/:id/pay', async (req, res) => {
 });
 
 /* ---------- Loan products ---------- */
-router.get('/loan-products', asyncHandler(async (req, res) => {
+router.get('/loan-products', requirePerm('loans.read'), asyncHandler(async (req, res) => {
   const { rows } = await query('SELECT * FROM loan_products ORDER BY min_amount');
   res.json(rows);
 }));
 
-router.post('/loan-products', asyncHandler(async (req, res) => {
+router.post('/loan-products', requirePerm('loans.review'), asyncHandler(async (req, res) => {
   const {
     name, description, interestRate, penaltyRate, minAmount, maxAmount,
     minDurationMonths, maxDurationMonths, requiredSavingsMultiple,
@@ -300,7 +307,7 @@ router.post('/loan-products', asyncHandler(async (req, res) => {
   }
 }));
 
-router.patch('/loan-products/:id', asyncHandler(async (req, res) => {
+router.patch('/loan-products/:id', requirePerm('loans.review'), asyncHandler(async (req, res) => {
   const allowed = [
     'description', 'interest_rate', 'penalty_rate', 'min_amount', 'max_amount',
     'min_duration_months', 'max_duration_months', 'required_savings_multiple',
@@ -327,7 +334,7 @@ router.patch('/loan-products/:id', asyncHandler(async (req, res) => {
 }));
 
 /* ---------- Fixed deposits ---------- */
-router.get('/fixed-deposits', asyncHandler(async (req, res) => {
+router.get('/fixed-deposits', requirePerm('savings.read'), asyncHandler(async (req, res) => {
   const { rows } = await query(`
     SELECT f.*, u.first_name, u.last_name, u.email
     FROM fixed_deposits f JOIN users u ON u.id = f.user_id
@@ -337,7 +344,7 @@ router.get('/fixed-deposits', asyncHandler(async (req, res) => {
 }));
 
 /* ---------- Exports ---------- */
-router.get('/export/transactions.csv', asyncHandler(async (req, res) => {
+router.get('/export/transactions.csv', requirePerm('exports'), asyncHandler(async (req, res) => {
   const { rows } = await query(`
     SELECT t.created_at, u.email, t.reference, t.type, t.description, t.amount, t.balance_after
     FROM transactions t JOIN users u ON u.id = t.user_id
@@ -348,7 +355,7 @@ router.get('/export/transactions.csv', asyncHandler(async (req, res) => {
     rows.map((t) => [t.created_at, t.email, t.reference, t.type, t.description, t.amount, t.balance_after]));
 }));
 
-router.get('/export/loans.csv', asyncHandler(async (req, res) => {
+router.get('/export/loans.csv', requirePerm('exports'), asyncHandler(async (req, res) => {
   const { rows } = await query(`
     SELECT l.id, u.email, l.amount, l.interest_rate, l.duration_months, l.total_repayable,
            l.amount_paid, l.penalty_accrued, l.status, l.created_at
@@ -360,7 +367,7 @@ router.get('/export/loans.csv', asyncHandler(async (req, res) => {
     rows.map((l) => [l.id, l.email, l.amount, l.interest_rate, l.duration_months, l.total_repayable, l.amount_paid, l.penalty_accrued, l.status, l.created_at]));
 }));
 
-router.get('/export/members.csv', asyncHandler(async (req, res) => {
+router.get('/export/members.csv', requirePerm('exports'), asyncHandler(async (req, res) => {
   const { rows } = await query(`
     SELECT u.first_name, u.last_name, u.email, u.phone, u.role, u.status, u.created_at,
            COALESCE(w.balance,0) AS balance
@@ -373,7 +380,7 @@ router.get('/export/members.csv', asyncHandler(async (req, res) => {
 }));
 
 /* ---------- Manual funding (officer credits a member by email/account) ---------- */
-router.post('/fund', asyncHandler(async (req, res) => {
+router.post('/fund', requirePerm('fund'), asyncHandler(async (req, res) => {
   const { identifier, amount, note } = req.body;
   if (!identifier) return res.status(400).json({ message: 'Member email or account number is required' });
   if (!isPositiveNumber(amount)) return res.status(400).json({ message: 'Invalid amount' });
@@ -415,11 +422,12 @@ router.post('/fund', asyncHandler(async (req, res) => {
 
   audit(req, 'wallet.funded_manual', 'user', result.transaction.user_id, { amount: amt, note: note || null });
   await settleDueCollections(withTransaction, result.transaction.user_id);
+  await runDuePlans();
   res.status(201).json(result);
 }));
 
 /* ---------- Audit log ---------- */
-router.get('/audit-logs', asyncHandler(async (req, res) => {
+router.get('/audit-logs', requirePerm('audit.read'), asyncHandler(async (req, res) => {
   const { action, entity, limit } = req.query;
   const conditions = [];
   const params = [];

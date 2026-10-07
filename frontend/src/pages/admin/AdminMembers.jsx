@@ -175,9 +175,11 @@ export default function AdminMembers() {
                 <TableCell className="text-right hidden lg:table-cell">{formatCurrency(u.total_savings)}</TableCell>
                 <TableCell>
                   <Select value={u.role} onValueChange={(v) => changeRole(u, v)}>
-                    <SelectTrigger className="h-8 w-28"><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="h-8 w-32"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="member">Member</SelectItem>
+                      <SelectItem value="officer">Officer</SelectItem>
+                      <SelectItem value="accountant">Accountant</SelectItem>
                       <SelectItem value="admin">Admin</SelectItem>
                     </SelectContent>
                   </Select>
@@ -224,9 +226,17 @@ export default function AdminMembers() {
                         </>
                       )}
                       {u.role === 'member' ? (
-                        <DropdownMenuItem onClick={() => changeRole(u, 'admin')}>
-                          <Shield className="h-4 w-4" /> Promote to Admin
-                        </DropdownMenuItem>
+                        <>
+                          <DropdownMenuItem onClick={() => changeRole(u, 'officer')}>
+                            <Shield className="h-4 w-4" /> Make Officer
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => changeRole(u, 'accountant')}>
+                            <Shield className="h-4 w-4" /> Make Accountant
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => changeRole(u, 'admin')}>
+                            <Shield className="h-4 w-4" /> Promote to Admin
+                          </DropdownMenuItem>
+                        </>
                       ) : (
                         <DropdownMenuItem onClick={() => changeRole(u, 'member')}>
                           <ShieldOff className="h-4 w-4" /> Demote to Member

@@ -1,6 +1,6 @@
 import express from 'express';
 import { query, withTransaction } from '../db.js';
-import { authenticate, requireAdmin } from '../middleware/auth.js';
+import { authenticate, requirePerm } from '../middleware/auth.js';
 import { generateRef, isPositiveNumber, toMoney, asyncHandler } from '../utils/helpers.js';
 import { audit } from '../lib/audit.js';
 import { notify } from '../lib/notify.js';
@@ -192,7 +192,7 @@ router.patch(
 router.get(
   '/requests',
   authenticate,
-  requireAdmin,
+  
   asyncHandler(async (req, res) => {
     const { status } = req.query;
     const params = [];
@@ -218,7 +218,7 @@ router.get(
 router.patch(
   '/requests/:id',
   authenticate,
-  requireAdmin,
+  
   asyncHandler(async (req, res) => {
     const { status, note } = req.body;
     if (!['approved', 'rejected'].includes(status))
@@ -286,7 +286,7 @@ router.patch(
 router.get(
   '/admin-products',
   authenticate,
-  requireAdmin,
+  
   asyncHandler(async (req, res) => {
     const { rows } = await query('SELECT * FROM store_products ORDER BY category, price');
     res.json(rows);
@@ -296,7 +296,7 @@ router.get(
 router.post(
   '/admin-products',
   authenticate,
-  requireAdmin,
+  
   asyncHandler(async (req, res) => {
     const { name, category, description, price, stock, minDownPct, maxMonths, markupPct } = req.body;
     if (!name || !category || !isPositiveNumber(price))
@@ -315,7 +315,7 @@ router.post(
 router.patch(
   '/admin-products/:id',
   authenticate,
-  requireAdmin,
+  
   asyncHandler(async (req, res) => {
     const allowed = ['name', 'category', 'description', 'price', 'stock', 'min_down_pct', 'max_months', 'markup_pct', 'status'];
     const sets = [];

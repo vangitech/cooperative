@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { query } from '../db.js';
+import { hasPerm } from '../lib/permissions.js';
 
 export async function authenticate(req, res, next) {
   try {
@@ -29,4 +30,14 @@ export function requireAdmin(req, res, next) {
   if (req.user?.role !== 'admin')
     return res.status(403).json({ message: 'Admin access required' });
   next();
+}
+
+// Granular staff gate: requirePerm('loans.review') etc.
+export function requirePerm(...perms) {
+  return (req, res, next) => {
+    if (!req.user) return res.status(401).json({ message: 'Authentication required' });
+    const ok = perms.some((p) => hasPerm(req.user.role, p));
+    if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
+    next();
+  };
 }
