@@ -143,13 +143,17 @@ router.patch(
       : { title: 'KYC needs attention', body: note || 'Your KYC was rejected. Update and resubmit.', link: '/profile' });
 
     // Approving a NIN-verified profile unlocks the static funding account
-    // (live mode requires NIN/BVN). Best-effort — failures stay retryable.
+    // (live mode requires NIN/BVN). Awaited (not fire-and-forget) because
+    // serverless functions may freeze before background work finishes.
+    let virtualAccount = null;
     if (status === 'approved' && rows[0].id_type === 'nin' && rows[0].id_number) {
-      assignVirtualAccount(req.params.userId, { nin: rows[0].id_number }).catch((e) =>
-        console.error('kyc-triggered account assignment failed:', e.message)
-      );
+      try {
+        virtualAccount = await assignVirtualAccount(req.params.userId, { nin: rows[0].id_number });
+      } catch (e) {
+        console.error('kyc-triggered account assignment failed:', e.message);
+      }
     }
-    res.json(rows[0]);
+    res.json({ ...rows[0], virtualAccount });
   })
 );
 
