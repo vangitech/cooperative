@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils';
 import { initials } from '@/lib/format';
 import {
   LayoutDashboard, Wallet, PiggyBank, HandCoins, TrendingUp,
-  User, LogOut, Users, ShieldCheck, Receipt
+  User, LogOut, Users, ShieldCheck, Receipt, ShoppingBag
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import NotificationsBell from '@/components/NotificationsBell';
@@ -14,6 +14,7 @@ const memberNav = [
   { to: '/wallet', label: 'Wallet', icon: Wallet },
   { to: '/savings', label: 'Savings', icon: PiggyBank },
   { to: '/loans', label: 'Loans', icon: HandCoins },
+  { to: '/market', label: 'Market', icon: ShoppingBag },
   { to: '/dividends', label: 'Dividends', icon: TrendingUp },
   { to: '/profile', label: 'Profile', icon: User },
 ];

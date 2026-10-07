@@ -5,6 +5,7 @@ import { generateRef, toMoney, isPositiveNumber, asyncHandler, sendCsv } from '.
 import { audit } from '../lib/audit.js';
 import { ensureSchedules } from '../lib/loans.js';
 import { notify } from '../lib/notify.js';
+import { settleDueCollections } from '../lib/collections.js';
 
 const router = express.Router();
 router.use(authenticate, requireAdmin);
@@ -255,6 +256,7 @@ router.patch('/dividends/:id/pay', async (req, res) => {
       body: `${result.amount} for ${result.period} is now in your wallet.`,
       link: '/dividends',
     });
+    await settleDueCollections(withTransaction, result.user_id);
     res.json(result);
   } catch (e) {
     res.status(400).json({ message: e.message });
@@ -410,6 +412,7 @@ router.post('/fund', asyncHandler(async (req, res) => {
   });
 
   audit(req, 'wallet.funded_manual', 'user', result.transaction.user_id, { amount: amt, note: note || null });
+  await settleDueCollections(withTransaction, result.transaction.user_id);
   res.status(201).json(result);
 }));
 

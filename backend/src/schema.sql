@@ -238,6 +238,62 @@ CREATE TABLE IF NOT EXISTS notifications (
 
 CREATE INDEX IF NOT EXISTS idx_notif_user ON notifications(user_id, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS store_products (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(160) NOT NULL,
+  category VARCHAR(40) NOT NULL, -- farm | electronics | groceries
+  description TEXT,
+  price NUMERIC(15,2) NOT NULL,
+  image_url TEXT,
+  stock INTEGER NOT NULL DEFAULT 0,
+  min_down_pct NUMERIC(5,2) NOT NULL DEFAULT 20,
+  max_months INTEGER NOT NULL DEFAULT 6,
+  markup_pct NUMERIC(5,2) NOT NULL DEFAULT 5, -- flat % on financed balance, prorated
+  status VARCHAR(20) NOT NULL DEFAULT 'active', -- active|archived
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO store_products (name, category, description, price, stock, min_down_pct, max_months, markup_pct) VALUES
+  ('Rice 50kg Bag', 'groceries', 'Premium long-grain rice', 85000, 20, 20, 6, 5),
+  ('Yam Tubers (20 pcs)', 'farm', 'Fresh farm yam, bulk pack', 30000, 20, 20, 3, 5),
+  ('Fertilizer 50kg', 'farm', 'NPK fertilizer for the season', 45000, 20, 20, 6, 5),
+  ('Smartphone', 'electronics', 'Android smartphone, 128GB', 150000, 10, 30, 12, 8),
+  ('Laptop', 'electronics', 'Work-ready laptop, 8GB RAM', 350000, 5, 30, 12, 8),
+  ('Cooking Oil 5L', 'groceries', 'Vegetable cooking oil', 18000, 30, 20, 3, 5)
+ON CONFLICT DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS collections (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  product_id INTEGER REFERENCES store_products(id),
+  quantity INTEGER NOT NULL DEFAULT 1,
+  unit_price NUMERIC(15,2) NOT NULL,
+  down_payment NUMERIC(15,2) NOT NULL DEFAULT 0,
+  financed NUMERIC(15,2) NOT NULL DEFAULT 0,
+  total_repayable NUMERIC(15,2) NOT NULL DEFAULT 0,
+  amount_paid NUMERIC(15,2) NOT NULL DEFAULT 0,
+  penalty_accrued NUMERIC(15,2) NOT NULL DEFAULT 0,
+  duration_months INTEGER NOT NULL,
+  auto_debit BOOLEAN NOT NULL DEFAULT true,
+  penalty_rate NUMERIC(5,2) NOT NULL DEFAULT 5, -- one-time % of overdue installment
+  status VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending|collected|completed|rejected|cancelled
+  reviewed_by INTEGER REFERENCES users(id),
+  reviewed_at TIMESTAMPTZ,
+  review_note TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS collection_schedules (
+  id SERIAL PRIMARY KEY,
+  collection_id INTEGER NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
+  due_number INTEGER NOT NULL,
+  due_date DATE NOT NULL,
+  amount_due NUMERIC(15,2) NOT NULL,
+  amount_paid NUMERIC(15,2) NOT NULL DEFAULT 0,
+  penalty_applied BOOLEAN NOT NULL DEFAULT false,
+  UNIQUE(collection_id, due_number)
+);
+
 ALTER TABLE loans ADD COLUMN IF NOT EXISTS product_id INTEGER REFERENCES loan_products(id);
 ALTER TABLE loans ADD COLUMN IF NOT EXISTS penalty_accrued NUMERIC(15,2) NOT NULL DEFAULT 0;
 

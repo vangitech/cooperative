@@ -14,6 +14,7 @@ import kycRoutes from './routes/kyc.js';
 import fixedRoutes from './routes/fixed.js';
 import notificationRoutes from './routes/notifications.js';
 import virtualAccountRoutes from './routes/virtualAccounts.js';
+import storeRoutes from './routes/store.js';
 
 for (const key of ['DATABASE_URL', 'JWT_SECRET']) {
   if (!process.env[key]) {
@@ -41,6 +42,7 @@ app.use('/api/kyc', kycRoutes);
 app.use('/api/fixed', fixedRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/virtual-accounts', virtualAccountRoutes);
+app.use('/api/store', storeRoutes);
 
 // 404
 app.use((req, res) => res.status(404).json({ message: 'Route not found' }));

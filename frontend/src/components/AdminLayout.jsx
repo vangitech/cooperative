@@ -16,13 +16,14 @@ import {
 } from '@/components/ui/dropdown-menu';
 import {
   LayoutDashboard, Users, HandCoins, TrendingUp, Receipt,
-  Menu, Bell, LogOut, User as UserIcon, Shield, Home, Search, ScrollText,
+  Menu, Bell, LogOut, User as UserIcon, Shield, Home, Search, ScrollText, Store,
 } from 'lucide-react';
 
 const adminNav = [
   { to: '/admin',             label: 'Overview',     icon: LayoutDashboard, exact: true },
   { to: '/admin/members',     label: 'Members',      icon: Users },
   { to: '/admin/loans',       label: 'Loans',        icon: HandCoins },
+  { to: '/admin/store',       label: 'Store',        icon: Store },
   { to: '/admin/dividends',   label: 'Dividends',    icon: TrendingUp },
   { to: '/admin/transactions', label: 'Transactions', icon: Receipt },
   { to: '/admin/activity',    label: 'Activity Log', icon: ScrollText },
@@ -32,6 +33,7 @@ const routeTitles = {
   '/admin': 'Overview',
   '/admin/members': 'Members',
   '/admin/loans': 'Loans',
+  '/admin/store': 'Store',
   '/admin/dividends': 'Dividends',
   '/admin/transactions': 'Transactions',
   '/admin/activity': 'Activity Log',

@@ -13,6 +13,7 @@ import {
 } from '../lib/flutterwave.js';
 import { audit } from '../lib/audit.js';
 import { notify } from '../lib/notify.js';
+import { settleDueCollections } from '../lib/collections.js';
 
 const router = express.Router();
 
@@ -200,6 +201,7 @@ router.get(
     audit(req, 'wallet.funded_online', 'payment_intent', intent.id, {
       txRef, amount: Number(intent.amount),
     });
+    await settleDueCollections(withTransaction, intent.user_id);
     res.json({ verified: true, ...result });
   })
 );
@@ -436,6 +438,7 @@ router.post(
                   'wallet.funded_account', 'virtual_account', account.id,
                   { amount: Number(v.amount), via: 'webhook' }
                 );
+                await settleDueCollections(withTransaction, account.user_id);
               }
             }
           }

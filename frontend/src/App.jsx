@@ -16,6 +16,7 @@ import Savings from '@/pages/Savings';
 import Loans from '@/pages/Loans';
 import Dividends from '@/pages/Dividends';
 import Profile from '@/pages/Profile';
+import Market from '@/pages/Market';
 
 import AdminDashboard from '@/pages/admin/AdminDashboard';
 import AdminMembers from '@/pages/admin/AdminMembers';
@@ -23,6 +24,7 @@ import AdminLoans from '@/pages/admin/AdminLoans';
 import AdminDividends from '@/pages/admin/AdminDividends';
 import AdminTransactions from '@/pages/admin/AdminTransactions';
 import AdminActivity from '@/pages/admin/AdminActivity';
+import AdminStore from '@/pages/admin/AdminStore';
 
 export default function App() {
   return (
@@ -43,6 +45,7 @@ export default function App() {
             <Route path="/loans" element={<Loans />} />
             <Route path="/dividends" element={<Dividends />} />
             <Route path="/profile" element={<Profile />} />
+            <Route path="/market" element={<Market />} />
           </Route>
 
           {/* Admin console — separate shadcn layout */}
@@ -56,6 +59,7 @@ export default function App() {
             <Route path="dividends" element={<AdminDividends />} />
             <Route path="transactions" element={<AdminTransactions />} />
             <Route path="activity" element={<AdminActivity />} />
+            <Route path="store" element={<AdminStore />} />
           </Route>
 
           <Route path="/" element={<Navigate to="/dashboard" replace />} />

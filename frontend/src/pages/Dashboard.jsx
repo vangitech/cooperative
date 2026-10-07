@@ -73,8 +73,8 @@ export default function Dashboard() {
                     <p className="text-xs text-muted-foreground">{formatDateTime(t.created_at)}</p>
                   </div>
                   <div className="text-right">
-                    <p className={t.type === 'withdrawal' || t.type === 'loan_repayment' ? 'text-destructive font-semibold' : 'text-green-600 font-semibold'}>
-                      {t.type === 'withdrawal' || t.type === 'loan_repayment' ? '-' : '+'}{formatCurrency(t.amount)}
+                    <p className={['withdrawal', 'loan_repayment', 'transfer_out', 'collection_repayment'].includes(t.type) ? 'text-destructive font-semibold' : 'text-green-600 font-semibold'}>
+                      {['withdrawal', 'loan_repayment', 'transfer_out', 'collection_repayment'].includes(t.type) ? '-' : '+'}{formatCurrency(t.amount)}
                     </p>
                     <Badge variant="outline" className="mt-1 text-xs capitalize">{t.type.replace('_', ' ')}</Badge>
                   </div>

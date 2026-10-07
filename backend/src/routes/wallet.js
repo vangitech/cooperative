@@ -4,6 +4,7 @@ import { authenticate } from '../middleware/auth.js';
 import { generateRef, isPositiveNumber, toMoney, asyncHandler, sendCsv } from '../utils/helpers.js';
 import { audit } from '../lib/audit.js';
 import { notify } from '../lib/notify.js';
+import { settleDueCollections } from '../lib/collections.js';
 
 const router = express.Router();
 router.use(authenticate);
@@ -232,13 +233,14 @@ router.post('/transfer', asyncHandler(async (req, res) => {
       `INSERT INTO notifications (user_id, title, body, link) VALUES ($1,$2,$3,$4)`,
       [target.id, 'Money received', `${req.user.first_name} ${req.user.last_name} sent you ${amt} NGN.`, '/wallet']
     );
-    return { reference: ref, recipient: `${target.first_name} ${target.last_name}`, amount: amt, balance: fromBalance };
-    });
+    return { reference: ref, recipientId: target.id, recipient: `${target.first_name} ${target.last_name}`, amount: amt, balance: fromBalance };
+  });
   } catch (e) {
     return res.status(400).json({ message: e.message });
   }
 
   audit(req, 'wallet.transfer_sent', 'user', req.user.id, { reference: result.reference, amount: amt });
+  await settleDueCollections(withTransaction, result.recipientId);
   res.status(201).json(result);
 }));
 

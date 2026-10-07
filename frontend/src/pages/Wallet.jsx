@@ -15,6 +15,8 @@ import {
   Tooltip as RTooltip, CartesianGrid, Legend,
 } from 'recharts';
 
+const OUT_TYPES = ['withdrawal', 'loan_repayment', 'transfer_out', 'collection_repayment', 'collection_down', 'fixed_deposit'];
+
 export default function Wallet() {
   const { refresh } = useAuth();
   const [wallet, setWallet] = useState(null);
@@ -411,8 +413,8 @@ export default function Wallet() {
                   <TableCell className="font-mono text-xs">{t.reference}</TableCell>
                   <TableCell><Badge variant="outline" className="capitalize">{t.type.replace('_', ' ')}</Badge></TableCell>
                   <TableCell className="text-sm">{t.description}</TableCell>
-                  <TableCell className={`text-right font-medium ${['withdrawal','loan_repayment','transfer_out'].includes(t.type) ? 'text-destructive' : 'text-green-600'}`}>
-                    {['withdrawal','loan_repayment','transfer_out'].includes(t.type) ? '-' : '+'}{formatCurrency(t.amount)}
+                  <TableCell className={`text-right font-medium ${OUT_TYPES.includes(t.type) ? 'text-destructive' : 'text-green-600'}`}>
+                    {OUT_TYPES.includes(t.type) ? '-' : '+'}{formatCurrency(t.amount)}
                   </TableCell>
                   <TableCell className="text-right">{formatCurrency(t.balance_after)}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{formatDateTime(t.created_at)}</TableCell>
