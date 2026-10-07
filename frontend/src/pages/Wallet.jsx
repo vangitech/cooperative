@@ -9,6 +9,10 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog';
+import {
+  ResponsiveContainer, AreaChart, Area, XAxis, YAxis,
+  Tooltip as RTooltip, CartesianGrid, Legend,
+} from 'recharts';
 
 export default function Wallet() {
   const { refresh } = useAuth();
@@ -27,6 +31,8 @@ export default function Wallet() {
   const [acctName, setAcctName] = useState('');
   const [acctLoading, setAcctLoading] = useState(false);
   const [acctError, setAcctError] = useState('');
+  const [analytics, setAnalytics] = useState(null);
+  const [months, setMonths] = useState(6);
 
   // Auto-resolve the account holder's name once a full 10-digit
   // account number is entered AND a bank is selected.
@@ -61,6 +67,10 @@ export default function Wallet() {
     setWallet(w); setTxs(t);
   };
   useEffect(() => { load(); }, []);
+
+  useEffect(() => {
+    api.get(`/wallet/analytics?months=${months}`).then(setAnalytics).catch(() => setAnalytics(null));
+  }, [months, wallet?.updated_at]);
 
   const submit = async () => {
     setMsg(null);
@@ -207,6 +217,84 @@ export default function Wallet() {
           {msg.text}
         </div>
       )}
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <div>
+            <CardTitle>Cash Flow</CardTitle>
+            <CardDescription>Inflow vs outflow per month</CardDescription>
+          </div>
+          <div className="flex gap-1">
+            {[3, 6, 12].map((m) => (
+              <Button key={m} variant={months === m ? 'default' : 'outline'} size="sm" onClick={() => setMonths(m)}>
+                {m}M
+              </Button>
+            ))}
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-4 sm:grid-cols-3 mb-4">
+            <div>
+              <p className="text-xs text-muted-foreground">Total In</p>
+              <p className="text-xl font-bold text-green-600">{formatCurrency(analytics?.summary.inflow)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Total Out</p>
+              <p className="text-xl font-bold text-destructive">{formatCurrency(analytics?.summary.outflow)}</p>
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Net</p>
+              <p className="text-xl font-bold">{formatCurrency(analytics?.summary.net)}</p>
+            </div>
+          </div>
+          <div className="h-56">
+            {(analytics?.monthly?.length || 0) > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={analytics.monthly}>
+                  <defs>
+                    <linearGradient id="inGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="hsl(160 84% 30%)" stopOpacity={0.7} />
+                      <stop offset="95%" stopColor="hsl(160 84% 30%)" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="outGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="hsl(0 84% 60%)" stopOpacity={0.7} />
+                      <stop offset="95%" stopColor="hsl(0 84% 60%)" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="month" fontSize={12} tickLine={false} axisLine={false} />
+                  <YAxis fontSize={12} tickLine={false} axisLine={false} width={70}
+                         tickFormatter={(v) => `₦${(v / 1000).toFixed(0)}k`} />
+                  <RTooltip formatter={(v) => formatCurrency(v)} />
+                  <Legend />
+                  <Area type="monotone" dataKey="inflow" name="In" stroke="hsl(160 84% 30%)" strokeWidth={2} fill="url(#inGrad)" />
+                  <Area type="monotone" dataKey="outflow" name="Out" stroke="hsl(0 84% 60%)" strokeWidth={2} fill="url(#outGrad)" />
+                </AreaChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full grid place-items-center text-sm text-muted-foreground">
+                Not enough activity yet
+              </div>
+            )}
+          </div>
+          {(analytics?.byType?.length || 0) > 0 && (
+            <div className="mt-4 space-y-2">
+              {analytics.byType.map((t) => {
+                const max = Math.max(...analytics.byType.map((x) => Number(x.total)), 1);
+                return (
+                  <div key={t.type} className="flex items-center gap-3 text-sm">
+                    <span className="w-32 truncate capitalize text-muted-foreground">{t.type.replace(/_/g, ' ')}</span>
+                    <div className="flex-1 h-2 rounded-full bg-muted overflow-hidden">
+                      <div className="h-full rounded-full bg-primary" style={{ width: `${(Number(t.total) / max) * 100}%` }} />
+                    </div>
+                    <span className="w-24 text-right font-medium">{formatCurrency(t.total)}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between space-y-0">

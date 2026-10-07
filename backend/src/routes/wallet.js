@@ -23,6 +23,45 @@ router.get('/transactions', asyncHandler(async (req, res) => {
   res.json(rows);
 }));
 
+// Analytics: monthly inflow/outflow plus totals by type (?months=3|6|12).
+router.get('/analytics', asyncHandler(async (req, res) => {
+  const months = [3, 6, 12].includes(Number(req.query.months)) ? Number(req.query.months) : 6;
+
+  const monthly = await query(
+    `SELECT TO_CHAR(DATE_TRUNC('month', created_at), 'Mon YYYY') AS month,
+            SUM(CASE WHEN type IN
+              ('deposit','savings','dividend','loan_disbursement','fixed_maturity','refund','fixed_break')
+              THEN amount ELSE 0 END)::float AS inflow,
+            SUM(CASE WHEN type IN ('withdrawal','loan_repayment','fixed_deposit')
+              THEN amount ELSE 0 END)::float AS outflow,
+            COUNT(*) AS count
+     FROM transactions
+     WHERE user_id = $1
+       AND created_at >= DATE_TRUNC('month', CURRENT_DATE) - (CAST($2 AS INTEGER) * INTERVAL '1 month')
+     GROUP BY DATE_TRUNC('month', created_at)
+     ORDER BY DATE_TRUNC('month', created_at)`,
+    [req.user.id, months]
+  );
+
+  const byType = await query(
+    `SELECT type, SUM(amount)::float AS total, COUNT(*) AS count
+     FROM transactions
+     WHERE user_id = $1
+       AND created_at >= DATE_TRUNC('month', CURRENT_DATE) - (CAST($2 AS INTEGER) * INTERVAL '1 month')
+     GROUP BY type ORDER BY total DESC`,
+    [req.user.id, months]
+  );
+
+  const inflow = monthly.rows.reduce((s, m) => s + Number(m.inflow), 0);
+  const outflow = monthly.rows.reduce((s, m) => s + Number(m.outflow), 0);
+  res.json({
+    months,
+    monthly: monthly.rows,
+    byType: byType.rows,
+    summary: { inflow, outflow, net: inflow - outflow },
+  });
+}));
+
 // Downloadable account statement (CSV, optional ?from=YYYY-MM-DD&to=YYYY-MM-DD).
 router.get('/statement.csv', asyncHandler(async (req, res) => {
   const { from, to } = req.query;
