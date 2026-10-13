@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils';
 import { initials } from '@/lib/format';
 import {
   LayoutDashboard, Wallet, PiggyBank, HandCoins, TrendingUp,
-  User, LogOut, Users, ShieldCheck, Receipt, ShoppingBag
+  User, LogOut, ShieldCheck, ShoppingBag
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import NotificationsBell from '@/components/NotificationsBell';
@@ -19,19 +19,15 @@ const memberNav = [
   { to: '/profile', label: 'Profile', icon: User },
 ];
 
-const adminNav = [
-  { to: '/admin', label: 'Overview', icon: LayoutDashboard },
-  { to: '/admin/members', label: 'Members', icon: Users },
-  { to: '/admin/loans', label: 'Loans', icon: HandCoins },
-  { to: '/admin/dividends', label: 'Dividends', icon: TrendingUp },
-  { to: '/admin/transactions', label: 'Transactions', icon: Receipt },
-  { to: '/dashboard', label: 'Member View', icon: ShieldCheck },
+const adminBackNav = [
+  { to: '/admin', label: 'Back to Admin Console', icon: ShieldCheck },
 ];
 
 export default function Layout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
-  const nav = user?.role === 'admin' ? adminNav : memberNav;
+  const isStaff = ['admin', 'officer', 'accountant'].includes(user?.role);
+  const nav = isStaff ? [...memberNav, ...adminBackNav] : memberNav;
 
   const handleLogout = () => { logout(); navigate('/login'); };
 
@@ -86,7 +82,7 @@ export default function Layout() {
       <div className="flex-1 flex flex-col min-w-0">
         <header className="h-16 border-b bg-background flex items-center px-4 md:px-6 justify-between">
           <h1 className="font-semibold capitalize">
-            {user?.role === 'admin' ? 'Admin Panel' : 'Member Portal'}
+            {isStaff ? 'Member View' : 'Member Portal'}
           </h1>
           <div className="flex items-center gap-1">
             <span className="text-sm text-muted-foreground hidden sm:block mr-2">

@@ -334,3 +334,22 @@ CREATE TABLE IF NOT EXISTS virtual_accounts (
 );
 
 ALTER TABLE transactions ADD COLUMN IF NOT EXISTS flw_id VARCHAR(120) UNIQUE;
+
+-- Security hardening: backend uses postgres via DATABASE_URL (bypasses RLS).
+-- Frontend must go through Express API, never direct Supabase REST.
+-- No policies = default deny for anon/authenticated.
+DO $$
+DECLARE t TEXT;
+BEGIN
+  FOREACH t IN ARRAY ARRAY[
+    'users','wallets','transactions','savings','loans','loan_repayments',
+    'loan_schedules','dividends','payment_intents','password_resets',
+    'kyc_profiles','guarantors','audit_logs','loan_products','deposit_rates',
+    'fixed_deposits','notifications','announcements','savings_plans',
+    'store_products','collections','collection_schedules','virtual_accounts'
+  ] LOOP
+    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('REVOKE ALL ON TABLE public.%I FROM anon, authenticated', t);
+  END LOOP;
+  REVOKE USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public FROM anon, authenticated;
+END $$;

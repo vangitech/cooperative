@@ -90,11 +90,11 @@ function SidebarContent({ onNavigate, role }) {
             <TooltipTrigger asChild>
               <Button asChild variant="outline" className="w-full justify-start" onClick={onNavigate}>
                 <NavLink to="/dashboard">
-                  <Home className="h-4 w-4" /> Member Portal
+                  <Home className="h-4 w-4" /> View as Member
                 </NavLink>
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="right">Switch to member view</TooltipContent>
+            <TooltipContent side="right">Preview member experience</TooltipContent>
           </Tooltip>
         </TooltipProvider>
       </div>
@@ -187,7 +187,7 @@ export default function AdminLayout() {
                       <UserIcon className="h-4 w-4" /> Profile
                     </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => navigate('/dashboard')}>
-                      <Shield className="h-4 w-4" /> Member View
+                      <Shield className="h-4 w-4" /> View as Member
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:text-destructive">
