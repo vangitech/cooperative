@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import coopTeam from '@/assets/Coop.jpg';
 
 export default function Register() {
   const { register, logout } = useAuth();
@@ -39,8 +40,8 @@ export default function Register() {
     <div className="min-h-screen grid lg:grid-cols-2">
       <div className="hidden lg:flex flex-col justify-center p-12 bg-primary text-primary-foreground">
         <img
-          src="/hero-unity.jpg"
-          alt="Diverse cooperative members joining hands together in unity"
+          src={coopTeam}
+          alt="Cooperative team stacking hands together in unity"
           className="w-full max-w-md mx-auto mb-6 h-auto rounded-2xl shadow-lg object-cover"
           loading="eager"
         />
@@ -48,7 +49,6 @@ export default function Register() {
         <p className="text-lg opacity-90 text-center">
           Create your account, get a wallet, start saving and unlock loans & dividends.
         </p>
-        <p className="text-xs opacity-60 text-center mt-4">Photo by Alex Levis on Pexels</p>
       </div>
 
       <div className="flex items-center justify-center p-6">
