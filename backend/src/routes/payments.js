@@ -2,7 +2,18 @@ import express from 'express';
 import { query, withTransaction } from '../db.js';
 import { authenticate } from '../middleware/auth.js';
 import { asyncHandler, generateRef, isPositiveNumber, toMoney } from '../utils/helpers.js';
-import {
+import { getProvider } from '../lib/providers.js';
+import { audit, auditTx } from '../lib/audit.js';
+import { postJournal } from '../lib/ledger.js';
+import { notify } from '../lib/notify.js';
+import { settleDueCollections } from '../lib/collections.js';
+import { runDuePlans } from '../lib/plans.js';
+
+// Default money rail (L4). All provider calls go through here —
+// switching rails is config (DEFAULT_RAIL), not code.
+const rail = getProvider();
+
+const {
   createPaymentLink,
   verifyTransactionById,
   verifyTransactionByRef,
@@ -10,12 +21,7 @@ import {
   getTransfer,
   listBanks,
   resolveAccount,
-} from '../lib/flutterwave.js';
-import { audit, auditTx } from '../lib/audit.js';
-import { postJournal } from '../lib/ledger.js';
-import { notify } from '../lib/notify.js';
-import { settleDueCollections } from '../lib/collections.js';
-import { runDuePlans } from '../lib/plans.js';
+} = rail;
 
 const router = express.Router();
 
@@ -68,7 +74,7 @@ async function creditFundIntent(client, intentId, flw, req, channel = 'web') {
     { txRef: intent.tx_ref, amount: amt },
     { before: { balance: Number(w.rows[0].balance) }, after: { balance: newBalance }, channel });
   await postJournal(client, req, { type: 'deposit', transactionId: tx.rows[0].id,
-    reference: intent.tx_ref, amount: amt, direction: 'in', settlement: '1002', channel });
+    reference: intent.tx_ref, amount: amt, direction: 'in', settlement: rail.settlementAccount, channel });
   return { already: false, transaction: tx.rows[0], balance: newBalance };
 }
 
@@ -101,7 +107,7 @@ async function creditVirtualAccount(client, userId, flw, accountNumber, req, cha
     { amount: amt },
     { before: { balance: Number(w.rows[0].balance) }, after: { balance: newBalance }, channel });
   await postJournal(client, req, { type: 'deposit', transactionId: tx.rows[0].id,
-    reference: tx.rows[0].reference, amount: amt, direction: 'in', settlement: '1002', channel });
+    reference: tx.rows[0].reference, amount: amt, direction: 'in', settlement: rail.settlementAccount, channel });
   return { already: false, transaction: tx.rows[0], balance: newBalance };
 }
 
@@ -126,7 +132,7 @@ async function refundWithdrawIntent(client, intentId, reason, req, channel = 'we
     [intent.user_id, w.rows[0].id, amt, newBalance, `${intent.tx_ref}-R`, reason || 'Withdrawal refund']
   ).then(async (t) => {
     await postJournal(client, req, { type: 'refund', transactionId: t.rows[0].id,
-      reference: `${intent.tx_ref}-R`, amount: amt, direction: 'in', settlement: '1002', channel });
+      reference: `${intent.tx_ref}-R`, amount: amt, direction: 'in', settlement: rail.settlementAccount, channel });
   });
   const r = await client.query(
     `UPDATE payment_intents SET status = 'failed', updated_at = NOW() WHERE id = $1 RETURNING *`,
@@ -295,7 +301,7 @@ router.post(
           [req.user.id, w.rows[0].id, amt, newBalance, txRef, `Bank withdrawal to ${accountNumber}`]
         ).then(async (t) => {
           await postJournal(client, req, { type: 'withdrawal', transactionId: t.rows[0].id,
-            reference: txRef, amount: amt, direction: 'out', settlement: '1002' });
+            reference: txRef, amount: amt, direction: 'out', settlement: rail.settlementAccount });
         });
         const r = await client.query(
           `INSERT INTO payment_intents (user_id, wallet_id, kind, tx_ref, amount, currency, meta)
@@ -401,26 +407,14 @@ router.get(
   })
 );
 
-/* ---------- Flutterwave webhook (public — verified by signature) ---------- */
+/* ---------- Webhooks (public — verified by signature) ---------- */
 
-router.post(
-  '/webhook',
-  asyncHandler(async (req, res) => {
-    const configured = process.env.FLW_WEBHOOK_HASH;
-    if (configured) {
-      if (req.headers['verif-hash'] !== configured) {
-        audit({ ip: req.ip, headers: req.headers }, 'wallet.webhook_rejected', 'payment_intent', null,
-          { reason: 'bad signature' }, { outcome: 'failure', channel: 'webhook' });
-        return res.status(401).json({ message: 'Invalid webhook signature' });
-      }
-    } else {
-      console.warn('⚠️  FLW_WEBHOOK_HASH not set — accepting unsigned webhook (dev only)');
-    }
-
-    const { event, data } = req.body || {};
-
-    try {
-      if ((event === 'charge.completed' && data?.tx_ref) || event === 'virtual_account.credited') {
+// Shared Flutterwave event processor (L4). Both the legacy /webhook path
+// and the provider-dispatched /webhook/:provider path funnel here, so a
+// second rail only adds its own processor + signature check.
+async function processFlwEvent(event, data, req) {
+  try {
+    if ((event === 'charge.completed' && data?.tx_ref) || event === 'virtual_account.credited') {
         const found = data?.tx_ref
           ? await query(
               `SELECT * FROM payment_intents WHERE tx_ref = $1 AND kind = 'fund' AND status = 'pending'`,
@@ -485,9 +479,57 @@ router.post(
       }
     } catch (e) {
       console.error('Webhook processing failed (will retry):', e.message);
-      return res.status(500).json({ message: 'Retry later' });
+      return { error: 'retry' };
     }
 
+    return { ok: true };
+}
+
+// Legacy Flutterwave path (kept for already-configured dashboards).
+router.post(
+  '/webhook',
+  asyncHandler(async (req, res) => {
+    const configured = process.env.FLW_WEBHOOK_HASH;
+    if (configured) {
+      if (req.headers['verif-hash'] !== configured) {
+        audit({ ip: req.ip, headers: req.headers }, 'wallet.webhook_rejected', 'payment_intent', null,
+          { reason: 'bad signature' }, { outcome: 'failure', channel: 'webhook' });
+        return res.status(401).json({ message: 'Invalid webhook signature' });
+      }
+    } else {
+      console.warn('⚠️  FLW_WEBHOOK_HASH not set — accepting unsigned webhook (dev only)');
+    }
+
+    const { event, data } = req.body || {};
+    const out = await processFlwEvent(event, data, req);
+    if (out.error) return res.status(500).json({ message: 'Retry later' });
+    res.json({ received: true });
+  })
+);
+
+// Provider-dispatched path: /webhook/mfb (or any future rail) verifies
+// with its own adapter, then funnels into the shared processor.
+router.post(
+  '/webhook/:provider',
+  asyncHandler(async (req, res) => {
+    let adapter;
+    try {
+      adapter = getProvider(req.params.provider);
+    } catch {
+      return res.status(404).json({ message: 'Unknown money rail' });
+    }
+    const v = await adapter.verifyWebhook(req);
+    if (!v.ok) {
+      audit({ ip: req.ip, headers: req.headers }, 'wallet.webhook_rejected', 'payment_intent', null,
+        { reason: v.reason || 'bad signature', provider: adapter.name },
+        { outcome: 'failure', channel: 'webhook' });
+      return res.status(401).json({ message: 'Invalid webhook signature' });
+    }
+    if (adapter.name !== 'flutterwave') {
+      return res.status(501).json({ message: `${adapter.name} webhook processor not wired yet` });
+    }
+    const out = await processFlwEvent(v.event, v.data, req);
+    if (out.error) return res.status(500).json({ message: 'Retry later' });
     res.json({ received: true });
   })
 );

@@ -25,14 +25,8 @@ connections are settlement rails, not replacements.
 > (history backfilled + disclosed ₦1,500 opening adjustment), L3
 > (reconciliation engine + suspense queue, live).
 
-## L4 — Provider adapters (CBS/MFB/bank connectivity)
-- One adapter interface (`initiate, verify, parseWebhook, fetchStatement`); Flutterwave becomes adapter #1, MFB/CBS adapter #2 on their API docs.
-- One settlement-float account per provider; reserve-first debit, idempotent confirm/refund.
-- Acceptance: new rail plugs in with zero ledger changes.
-
-## L5 — Financial statements in the reports pack
-- Trial balance, P&L, balance sheet (plus existing 7 reports), org/branch slicing.
-- Acceptance: trial balance zeroes; wallet sums match control account at go-live.
+## L4 — Provider adapters — ✅ done, moved to tracker
+## L5 — Financial statements — ✅ done, moved to tracker
 
 ---
 
@@ -55,6 +49,27 @@ declaration of a period.
 ## D4 — Lifecycle hygiene
 - Pending/unclaimed follow-up report after X days; reversal path for erroneous declarations (linked entries, never edits).
 - Acceptance: no dividend row sits unexplained; errors correctable with trail.
+
+---
+
+# Audit Log Review — Coverage Analysis (2026-10-14, live data)
+
+Question: does the system log who logged in, when, and who did what with money?
+Verdict: logins and money actions covered; tamper-proofing and session tracking are not.
+
+## What exists (verified live: 13 columns, 40 distinct actions)
+- Logins: 78× `auth.login` with actor, role, timestamp, user-agent, IP, channel — plus register, password resets, `auth.login_failed`.
+- Money: savings/loans/wallet/fixed/store/dividends/fund actions with actor + role + before/after + outcome, committed atomically (P2).
+- Governance: role grants, KYC reviews, product config diffs, `report.generated` (11×), `export.downloaded`, `recon.run`, adjustments, period closes.
+- Failures: logged (4 rows) but unwatched.
+
+## Gaps (follow-up work)
+1. **A1 — Session tracking:** add `session_id` (set at login, carried per event) — logout is client-side only today.
+2. **A2 — Journal↔audit cross-link:** one linking column so money ↔ books ↔ who is one query.
+3. **A3 — Two-era history:** pre-2026-10-13 rows lack role/before-after; 132 rows lack user-agent (old + system/webhook rows).
+4. **A4 — Tamper evidence:** P4 hash-chain still pending; DB-password holders could rewrite undetected.
+5. **A5 — Retention + watcher:** no retention policy (suggest 7 years, yearly archives); no alerts (≥5 failed logins/10 min, off-hours exports, role grants); monthly treasurer review of failures + exports.
+- Acceptance: session chains queryable; audit↔journal join works; retention documented; first monthly review done.
 
 ---
 

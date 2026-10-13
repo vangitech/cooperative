@@ -18,6 +18,8 @@ stays in `update v1.md` (P4 hash-chain, L3–L5 ledger, D1–D4 dividends).
 | L1 | Chart of accounts + journals core | ✅ done | 2026-10-13 | a933089 | 13 seeded accounts; postJournal() atomic on all money paths; UNIQUE source guard; history backfilled (16 entries) + disclosed ₦1,500 opening adjustment (JE-100034); trial balance zero, control ties wallets |
 | L2 | Posting templates + maker-checker + locks | ✅ done | 2026-10-13 | e5117f0 | True economic legs (receivables, payables, income splits, distributions); adjustments propose→approve API; period locks; linked reversals; all live-tested incl. self-approve denial |
 | L3 | Reconciliation engine + suspense | ✅ done | 2026-10-14 | 4d30b08 | Trial-balance/wallets-control/negative-guard/float-vs-statement checks; suspense upsert + auto-clear; manual resolve with note; Reconcile console; mismatch + auto-clear live-verified |
+| L4 | Provider adapters (CBS/MFB/bank) | ✅ done | 2026-10-14 | — | Adapter interface + registry (flutterwave live, mfb stub with config contract); 8 call sites rewired; settlement per rail; legacy + :provider webhooks verified; inactive 1003 seeded |
+| L5 | Financial statements + org slicing | ✅ done | 2026-10-14 | — | P&L/balance-sheet libs; trial-balance/P&L/BS in 10-report pack (JSON+CSV); org auto-tag on postings; BS balances (A=L+E); alias-fold bug caught by testing |
 
 ## Dividends
 

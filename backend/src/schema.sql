@@ -483,6 +483,7 @@ CREATE INDEX IF NOT EXISTS idx_lines_account ON journal_lines(account_id);
 INSERT INTO accounts (code, name, type, provider) VALUES
   ('1001', 'Settlement Float – General', 'asset', NULL),
   ('1002', 'Settlement Float – Flutterwave', 'asset', 'flutterwave'),
+  ('1003', 'Settlement Float – MFB (pending rail config)', 'asset', 'mfb'),
   ('1100', 'Member Wallets Control', 'asset', NULL),
   ('1200', 'Loans Receivable', 'asset', NULL),
   ('1210', 'Store Receivables', 'asset', NULL),

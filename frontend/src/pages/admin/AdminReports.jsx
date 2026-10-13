@@ -12,11 +12,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { cn } from '@/lib/utils';
 import {
   FileText, Users, PiggyBank, HandCoins, Coins, Receipt, ScrollText,
-  Download, Printer, CalendarDays, Building2,
+  Download, Printer, CalendarDays, Building2, Scale, TrendingUp, Landmark,
 } from 'lucide-react';
 
 const REPORTS = [
   { type: 'financial-summary', label: 'Financial Summary', icon: FileText, desc: 'Savings, loans, repayments, dividends & membership for the period.' },
+  { type: 'trial-balance', label: 'Trial Balance', icon: Scale, desc: 'Every ledger account with debits and credits — must net to zero.' },
+  { type: 'profit-loss', label: 'Profit & Loss', icon: TrendingUp, desc: 'Income vs expenses for the period, per account.' },
+  { type: 'balance-sheet', label: 'Balance Sheet', icon: Landmark, desc: 'Assets, liabilities and equity as of the period end.' },
   { type: 'member-register', label: 'Member Register', icon: Users, desc: 'Every member with status, join date, wallet and savings totals.' },
   { type: 'savings-ledger', label: 'Savings Ledger', icon: PiggyBank, desc: 'All savings entries booked in the period.' },
   { type: 'loan-book', label: 'Loan Book', icon: HandCoins, desc: 'All loans with disbursed, repaid and outstanding balances.' },
@@ -83,7 +86,7 @@ export default function AdminReports() {
       .catch((e) => toast.error(e.message));
   };
 
-  const moneyCols = new Set(['Value', 'Amount', 'Wallet', 'Total savings', 'Repayable', 'Paid', 'Balance after']);
+  const moneyCols = new Set(['Value', 'Amount', 'Wallet', 'Total savings', 'Repayable', 'Paid', 'Balance after', 'Debit', 'Credit', 'Balance', 'Net surplus']);
   const showRows = (report?.rows || []).slice(0, 100);
 
   return (

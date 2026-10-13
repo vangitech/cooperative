@@ -10,6 +10,33 @@ import { Label } from '@/components/ui/label';
 
 const ENTITIES = ['', 'user', 'auth', 'kyc', 'guarantor', 'loan', 'dividend', 'payment_intent', 'report', 'export'];
 
+// Audit metadata as human-readable pairs ("name: Emergency Loan")
+// instead of raw JSON; full JSON stays available via tooltip.
+function parseMetadata(meta) {
+  if (!meta) return null;
+  if (typeof meta === 'string') {
+    try {
+      return JSON.parse(meta);
+    } catch {
+      return meta;
+    }
+  }
+  return meta;
+}
+
+function formatMetadata(meta, full = false) {
+  const obj = parseMetadata(meta);
+  if (obj === null || obj === undefined) return '—';
+  if (typeof obj !== 'object') return String(obj);
+  const entries = Object.entries(obj);
+  if (!entries.length) return '—';
+  const pretty = entries
+    .map(([k, v]) => `${k.replace(/_/g, ' ')}: ${typeof v === 'object' ? JSON.stringify(v) : v ?? '—'}`)
+    .join(', ');
+  if (full || pretty.length <= 120) return pretty;
+  return `${pretty.slice(0, 120)}…`;
+}
+
 export default function AdminActivity() {
   const [logs, setLogs] = useState([]);
   const [action, setAction] = useState('');
@@ -95,8 +122,8 @@ export default function AdminActivity() {
                   <TableCell className="text-sm text-muted-foreground">
                     {l.entity ? `${l.entity}${l.entity_id ? ` #${l.entity_id}` : ''}` : '—'}
                   </TableCell>
-                  <TableCell className="text-xs text-muted-foreground font-mono max-w-xs truncate">
-                    {l.metadata ? JSON.stringify(typeof l.metadata === 'string' ? JSON.parse(l.metadata) : l.metadata) : '—'}
+                  <TableCell className="text-xs text-muted-foreground font-mono max-w-xs truncate" title={formatMetadata(l.metadata, true)}>
+                    {formatMetadata(l.metadata)}
                   </TableCell>
                 </TableRow>
               ))}

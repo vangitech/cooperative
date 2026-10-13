@@ -1,6 +1,6 @@
 import { query } from '../db.js';
 import { generateRef } from '../utils/helpers.js';
-import { createVirtualAccount } from './flutterwave.js';
+import { getProvider } from './providers.js';
 
 // Assign a permanent Flutterwave virtual account to a member for
 // wallet funding via bank transfer. Best-effort: returns the account
@@ -15,7 +15,8 @@ export async function assignVirtualAccount(userId, { bvn, nin } = {}) {
   if (!user) return null;
 
   const txRef = generateRef('VA-USER');
-  const flw = await createVirtualAccount({
+  const rail = getProvider();
+  const flw = await rail.createVirtualAccount({
     email: user.email,
     txRef,
     firstname: user.first_name,
@@ -27,7 +28,7 @@ export async function assignVirtualAccount(userId, { bvn, nin } = {}) {
   });
 
   const data = flw.data || {};
-  if (!data.account_number) throw new Error('Flutterwave did not return an account number');
+  if (!data.account_number) throw new Error(`${rail.name} did not return an account number`);
 
   const { rows } = await query(
     `INSERT INTO virtual_accounts (user_id, account_number, bank_name, flw_ref, tx_ref)

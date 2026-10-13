@@ -74,6 +74,19 @@ export async function postJournal(client, req, {
   const period = periodOf(postedAt || new Date());
   await assertOpenPeriod(client, period);
 
+  // Org slicing for branch/sector reporting: default to the actor's
+  // primary organisation so every entry is attributable going forward.
+  let entryOrg = orgId;
+  const actorUserId = req?.user?.id ?? null;
+  if (!entryOrg && actorUserId) {
+    const m = await client.query(
+      `SELECT org_id FROM organisation_members
+       WHERE user_id = $1 AND is_primary AND status = 'active' LIMIT 1`,
+      [actorUserId]
+    );
+    entryOrg = m.rows[0]?.org_id ?? null;
+  }
+
   // Idempotency: a replay returns the original entry, no duplicate.
   if (transactionId) {
     const dup = await client.query('SELECT id, entry_no FROM journal_entries WHERE source_transaction_id = $1', [
@@ -89,7 +102,7 @@ export async function postJournal(client, req, {
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE($11, NOW()))
      RETURNING id, entry_no`,
     [
-      period, type, transactionId, 'NGN', orgId,
+      period, type, transactionId, 'NGN', entryOrg,
       req?.user?.id ?? null, req?.user?.role ?? null,
       channel || (req?.user ? 'web' : 'system'),
       reference ? `${type} ${reference}` : type, reversalOf || null, postedAt || null,
@@ -167,4 +180,45 @@ export async function surplusForMonth(month) {
     else expenses = -Number(r.net);
   }
   return { month, income, expenses, surplus: income - expenses };
+}
+
+// L5 profit & loss for a YYYY-MM journal period (per-account detail).
+export async function profitAndLoss(month) {
+  const s = await surplusForMonth(month); // validates YYYY-MM
+  const { rows } = await query(
+    `SELECT a.code, a.name, a.type,
+            COALESCE(SUM(l.credit - l.debit),0) AS net
+     FROM journal_lines l
+     JOIN journal_entries e ON e.id = l.entry_id
+     JOIN accounts a ON a.id = l.account_id
+     WHERE e.period = $1 AND a.type IN ('income','expense')
+     GROUP BY a.code, a.name, a.type ORDER BY a.code`,
+    [month]
+  );
+  const income = rows.filter((r) => r.type === 'income').map((r) => ({ code: r.code, name: r.name, amount: Number(r.net) }));
+  const expenses = rows.filter((r) => r.type === 'expense').map((r) => ({ code: r.code, name: r.name, amount: -Number(r.net) }));
+  return { ...s, income, expenses };
+}
+
+// L5 balance sheet: cumulative balances by class (point-in-time).
+export async function balanceSheet() {
+  const { rows } = await query(
+    `SELECT a.code, a.name, a.type,
+            COALESCE(SUM(l.debit - l.credit),0) AS debitbal,
+            COALESCE(SUM(l.credit - l.debit),0) AS creditbal
+     FROM accounts a LEFT JOIN journal_lines l ON l.account_id = a.id
+     GROUP BY a.code, a.name, a.type ORDER BY a.code`
+  );
+  const bal = (r) => (['asset', 'expense'].includes(r.type) ? Number(r.debitbal) : Number(r.creditbal));
+  const groups = { asset: [], liability: [], equity: [] };
+  for (const r of rows) {
+    if (groups[r.type]) groups[r.type].push({ code: r.code, name: r.name, balance: bal(r) });
+  }
+  const sum = (xs) => xs.reduce((s, x) => s + x.balance, 0);
+  return {
+    asOf: new Date().toISOString(),
+    assets: groups.asset, liabilities: groups.liability, equity: groups.equity,
+    totalAssets: sum(groups.asset),
+    totalLiabEquity: sum(groups.liability) + sum(groups.equity),
+  };
 }

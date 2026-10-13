@@ -1,8 +1,9 @@
 import express from 'express';
 import { query } from '../db.js';
 import { authenticate, requirePerm } from '../middleware/auth.js';
-import { asyncHandler, sendCsv } from '../utils/helpers.js';
+import { asyncHandler, sendCsv, toMoney } from '../utils/helpers.js';
 import { audit } from '../lib/audit.js';
+import { trialBalance, balanceSheet } from '../lib/ledger.js';
 
 // Regulatory compliance reporting: on-demand period reports
 // (monthly / quarterly / yearly / custom range) as JSON preview
@@ -22,6 +23,9 @@ const TYPES = [
   'dividend-register',
   'transaction-ledger',
   'audit-trail',
+  'trial-balance',
+  'profit-loss',
+  'balance-sheet',
 ];
 
 const pad = (n) => String(n).padStart(2, '0');
@@ -228,6 +232,62 @@ async function buildReport(type, from, to) {
   }
 }
 
+// L5 financial statements (from the journal layer — point-in-time or month).
+async function buildStatement(type, range) {
+  if (type === 'trial-balance') {
+    const tb = await trialBalance();
+    const dr = tb.reduce((s, a) => s + Number(a.debit), 0);
+    const cr = tb.reduce((s, a) => s + Number(a.credit), 0);
+    return {
+      columns: ['Code', 'Account', 'Type', 'Debit', 'Credit'],
+      rows: tb.map((a) => [a.code, a.name, a.type, Number(a.debit), Number(a.credit)]),
+      summary: { balanced: Math.abs(dr - cr) < 0.005, totalDr: dr, totalCr: cr },
+    };
+  }
+  if (type === 'profit-loss') {
+    const { rows } = await query(
+      `SELECT a.code, a.name, a.type,
+              COALESCE(SUM(l.credit - l.debit),0) AS net
+       FROM journal_lines l
+       JOIN journal_entries e ON e.id = l.entry_id
+       JOIN accounts a ON a.id = l.account_id
+       WHERE e.created_at >= $1 AND e.created_at < $2 AND a.type IN ('income','expense')
+       GROUP BY a.code, a.name, a.type ORDER BY a.code`,
+      [range.from, range.to]
+    );
+    const income = rows.filter((r) => r.type === 'income').map((r) => ['Income', r.code, r.name, Number(r.net)]);
+    const expenses = rows.filter((r) => r.type === 'expense').map((r) => ['Expenses', r.code, r.name, -Number(r.net)]);
+    const totalIncome = income.reduce((s, r) => s + r[3], 0);
+    const totalExpenses = expenses.reduce((s, r) => s + r[3], 0);
+    return {
+      columns: ['Section', 'Code', 'Account', 'Amount'],
+      rows: [
+        ...income, ...expenses,
+        ['Total', '', 'Net surplus', toMoney(totalIncome - totalExpenses)],
+      ],
+      summary: { totalIncome, totalExpenses, net: toMoney(totalIncome - totalExpenses) },
+    };
+  }
+  // balance-sheet: cumulative as of the range end.
+  const bs = await balanceSheet();
+  const section = (label, xs) => xs.map((r) => [label, r.code, r.name, r.balance]);
+  return {
+    columns: ['Section', 'Code', 'Account', 'Balance'],
+    rows: [
+      ...section('Assets', bs.assets),
+      ...section('Liabilities', bs.liabilities),
+      ...section('Equity', bs.equity),
+      ['Total', '', 'Assets', bs.totalAssets],
+      ['Total', '', 'Liabilities + Equity', bs.totalLiabEquity],
+    ],
+    summary: {
+      asOf: bs.asOf, totalAssets: bs.totalAssets,
+      totalLiabEquity: bs.totalLiabEquity,
+      balances: Math.abs(bs.totalAssets - bs.totalLiabEquity) < 0.005,
+    },
+  };
+}
+
 router.get('/:type', requirePerm('reports.read'), asyncHandler(async (req, res) => {
   const { type } = req.params;
   if (!TYPES.includes(type)) {
@@ -240,7 +300,9 @@ router.get('/:type', requirePerm('reports.read'), asyncHandler(async (req, res) 
     return res.status(e.status || 400).json({ message: e.message });
   }
 
-  const report = await buildReport(type, range.from, range.to);
+  const report = ['trial-balance', 'profit-loss', 'balance-sheet'].includes(type)
+    ? await buildStatement(type, range)
+    : await buildReport(type, range.from, range.to);
   const meta = {
     type,
     period: range.period,
