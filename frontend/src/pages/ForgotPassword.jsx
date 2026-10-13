@@ -38,7 +38,7 @@ export default function ForgotPassword() {
           <CardContent>
             {sent ? (
               <div className="space-y-4 text-center py-2">
-                <div className="text-sm bg-green-50 text-green-700 p-4 rounded-md">
+                <div className="text-sm bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300 p-4 rounded-md">
                   If an account exists for that email, a reset link has been sent. It expires in 60 minutes.
                 </div>
                 <Button asChild variant="outline" className="w-full">

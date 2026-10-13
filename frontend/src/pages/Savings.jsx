@@ -105,7 +105,7 @@ export default function Savings() {
       </div>
 
       {msg && (
-        <div className={`text-sm p-3 rounded-md ${msg.type === 'ok' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+        <div className={`text-sm p-3 rounded-md ${msg.type === 'ok' ? 'bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300'}`}>
           {msg.text}
         </div>
       )}
@@ -114,7 +114,7 @@ export default function Savings() {
         <CardHeader><CardTitle>Recurring Plans</CardTitle></CardHeader>
         <CardContent>
           {msg && (
-            <div className={`text-sm p-3 rounded-md mb-4 ${msg.type === 'ok' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+            <div className={`text-sm p-3 rounded-md mb-4 ${msg.type === 'ok' ? 'bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300'}`}>
               {msg.text}
             </div>
           )}
@@ -169,7 +169,7 @@ export default function Savings() {
           <CardHeader><CardTitle>Make a Deposit</CardTitle></CardHeader>
           <CardContent>
             <form onSubmit={submit} className="space-y-4">
-              {msg && <div className={`text-sm p-3 rounded-md ${msg.type === 'ok' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>{msg.text}</div>}
+              {msg && <div className={`text-sm p-3 rounded-md ${msg.type === 'ok' ? 'bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300'}`}>{msg.text}</div>}
               <div><Label>Amount</Label><Input type="number" min="1" step="0.01" required value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} placeholder="0.00" /></div>
               <div>
                 <Label>Savings Type</Label>
@@ -207,7 +207,7 @@ export default function Savings() {
                     <TableCell className="text-sm">{formatDate(s.savings_date)}</TableCell>
                     <TableCell className="capitalize text-sm">{s.savings_type}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">{s.note || '—'}</TableCell>
-                    <TableCell className="text-right font-semibold text-green-600">{formatCurrency(s.amount)}</TableCell>
+                    <TableCell className="text-right font-semibold text-green-600 dark:text-green-400">{formatCurrency(s.amount)}</TableCell>
                   </TableRow>
                 ))}
                 {list.length === 0 && (
@@ -263,7 +263,7 @@ export default function Savings() {
                     <TableCell className="text-right font-medium">{formatCurrency(f.amount)}</TableCell>
                     <TableCell className="text-sm">{f.tenure_months} mo @ {f.annual_rate}%</TableCell>
                     <TableCell className="text-sm">{formatDate(f.matures_at)}</TableCell>
-                    <TableCell className="text-right text-green-600">{formatCurrency(f.expected_payout)}</TableCell>
+                    <TableCell className="text-right text-green-600 dark:text-green-400">{formatCurrency(f.expected_payout)}</TableCell>
                     <TableCell className="capitalize text-sm">{f.status}</TableCell>
                     <TableCell className="text-right whitespace-nowrap">
                       {f.status === 'active' && (

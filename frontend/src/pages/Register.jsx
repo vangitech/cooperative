@@ -60,7 +60,7 @@ export default function Register() {
           <CardContent>
             {pending ? (
               <div className="space-y-4 text-center py-4">
-                <div className="text-sm bg-green-50 text-green-700 p-4 rounded-md">
+                <div className="text-sm bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300 p-4 rounded-md">
                   Application received. An admin will review it shortly —
                   you'll be able to sign in once approved.
                 </div>

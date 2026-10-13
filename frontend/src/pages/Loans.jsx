@@ -68,7 +68,7 @@ export default function Loans() {
         <CardHeader><CardTitle>Apply for a Loan</CardTitle></CardHeader>
         <CardContent>
             <form onSubmit={apply} className="space-y-4">
-              {msg && <div className={`text-sm p-3 rounded-md ${msg.type === 'ok' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>{msg.text}</div>}
+              {msg && <div className={`text-sm p-3 rounded-md ${msg.type === 'ok' ? 'bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300'}`}>{msg.text}</div>}
               <div>
                 <Label>Loan Product</Label>
                 <Select value={String(form.productId)} onValueChange={(v) => setForm({ ...form, productId: v })}>

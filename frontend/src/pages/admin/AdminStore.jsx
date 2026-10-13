@@ -137,7 +137,7 @@ export default function AdminStore() {
                             <DropdownMenuLabel>Review</DropdownMenuLabel>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem onClick={() => { setReview(r); setNote(''); }}>
-                              <Check className="h-4 w-4 text-green-600" /> Approve & Release
+                              <Check className="h-4 w-4 text-green-600 dark:text-green-400" /> Approve & Release
                             </DropdownMenuItem>
                             <DropdownMenuItem className="text-destructive focus:text-destructive"
                                               onClick={() => { setReview(r); setNote(''); }}>

@@ -54,7 +54,7 @@ export default function PaymentCallback() {
           )}
           {state.status === 'success' && (
             <div className="flex flex-col items-center gap-2 py-4">
-              <CheckCircle2 className="h-12 w-12 text-green-600" />
+              <CheckCircle2 className="h-12 w-12 text-green-600 dark:text-green-400" />
               <p className="text-sm">{state.message}</p>
             </div>
           )}

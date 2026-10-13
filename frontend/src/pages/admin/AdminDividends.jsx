@@ -166,7 +166,7 @@ export default function AdminDividends() {
                             <DropdownMenuLabel>Actions</DropdownMenuLabel>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem onClick={() => setPayTarget(d)}>
-                              <CheckCircle2 className="h-4 w-4 text-green-600" /> Pay to Wallet
+                              <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" /> Pay to Wallet
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
@@ -187,7 +187,7 @@ export default function AdminDividends() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <CheckCircle2 className="h-5 w-5 text-green-600" /> Confirm Dividend Payout
+              <CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400" /> Confirm Dividend Payout
             </DialogTitle>
             <DialogDescription>
               Pay {formatCurrency(payTarget?.amount)} to{' '}

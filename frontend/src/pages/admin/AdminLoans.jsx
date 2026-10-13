@@ -127,7 +127,7 @@ export default function AdminLoans() {
                     <DropdownMenuLabel>Review</DropdownMenuLabel>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onClick={() => { setReviewTarget({ loan: l, action: 'approved' }); setNote(''); }}>
-                      <Check className="h-4 w-4 text-green-600" /> Approve & Disburse
+                      <Check className="h-4 w-4 text-green-600 dark:text-green-400" /> Approve & Disburse
                     </DropdownMenuItem>
                     <DropdownMenuItem className="text-destructive focus:text-destructive"
                                       onClick={() => { setReviewTarget({ loan: l, action: 'rejected' }); setNote(''); }}>
@@ -287,7 +287,7 @@ export default function AdminLoans() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               {reviewTarget?.action === 'approved' ? (
-                <><CheckCircle2 className="h-5 w-5 text-green-600" /> Approve Loan</>
+                <><CheckCircle2 className="h-5 w-5 text-green-600 dark:text-green-400" /> Approve Loan</>
               ) : (
                 <><XCircle className="h-5 w-5 text-destructive" /> Reject Loan</>
               )}

@@ -245,12 +245,12 @@ export default function Wallet() {
                   <p className="text-sm text-muted-foreground">Resolving account name…</p>
                 )}
                 {!acctLoading && acctName && (
-                  <div className="text-sm p-3 rounded-md bg-green-50 text-green-700">
+                  <div className="text-sm p-3 rounded-md bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300">
                     Account Name: <span className="font-semibold">{acctName}</span>
                   </div>
                 )}
                 {!acctLoading && acctError && (
-                  <div className="text-sm p-3 rounded-md bg-red-50 text-red-700">{acctError}</div>
+                  <div className="text-sm p-3 rounded-md bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300">{acctError}</div>
                 )}
                 <DialogFooter>
                   <Button onClick={submitWithdraw} disabled={wdLoading || !acctName}>
@@ -264,7 +264,7 @@ export default function Wallet() {
       </Card>
 
       {msg && (
-        <div className={`text-sm p-3 rounded-md ${msg.type === 'ok' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+        <div className={`text-sm p-3 rounded-md ${msg.type === 'ok' ? 'bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300'}`}>
           {msg.text}
         </div>
       )}
@@ -309,7 +309,7 @@ export default function Wallet() {
               <div><Label>Email or account number</Label><Input value={sendId} onChange={(e) => { setSendId(e.target.value); setRecipient(null); }} placeholder="member@example.com or 10-digit account" /></div>
               <Button variant="outline" onClick={resolveRecipient}>Verify Recipient</Button>
               {recipient && (
-                <div className="text-sm p-3 rounded-md bg-green-50 text-green-700">
+                <div className="text-sm p-3 rounded-md bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300">
                   To: <span className="font-semibold">{recipient.name}</span> ({recipient.email})
                 </div>
               )}
@@ -342,7 +342,7 @@ export default function Wallet() {
           <div className="grid gap-4 sm:grid-cols-3 mb-4">
             <div>
               <p className="text-xs text-muted-foreground">Total In</p>
-              <p className="text-xl font-bold text-green-600">{formatCurrency(analytics?.summary.inflow)}</p>
+              <p className="text-xl font-bold text-green-600 dark:text-green-400">{formatCurrency(analytics?.summary.inflow)}</p>
             </div>
             <div>
               <p className="text-xs text-muted-foreground">Total Out</p>
@@ -430,7 +430,7 @@ export default function Wallet() {
                   <TableCell className="font-mono text-xs">{t.reference}</TableCell>
                   <TableCell><Badge variant="outline" className="capitalize">{t.type.replace('_', ' ')}</Badge></TableCell>
                   <TableCell className="text-sm">{t.description}</TableCell>
-                  <TableCell className={`text-right font-medium ${OUT_TYPES.includes(t.type) ? 'text-destructive' : 'text-green-600'}`}>
+                  <TableCell className={`text-right font-medium ${OUT_TYPES.includes(t.type) ? 'text-destructive' : 'text-green-600 dark:text-green-400'}`}>
                     {OUT_TYPES.includes(t.type) ? '-' : '+'}{formatCurrency(t.amount)}
                   </TableCell>
                   <TableCell className="text-right">{formatCurrency(t.balance_after)}</TableCell>

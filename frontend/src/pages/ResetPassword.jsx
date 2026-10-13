@@ -51,7 +51,7 @@ export default function ResetPassword() {
               </div>
             ) : done ? (
               <div className="space-y-4 text-center py-2">
-                <div className="text-sm bg-green-50 text-green-700 p-4 rounded-md">
+                <div className="text-sm bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300 p-4 rounded-md">
                   Password has been reset. You can now sign in.
                 </div>
                 <Button asChild className="w-full">
