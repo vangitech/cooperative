@@ -6,6 +6,7 @@ import { authenticate } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/helpers.js';
 import { audit, hashToken, newResetToken } from '../lib/audit.js';
 import { assignVirtualAccount } from '../lib/virtualAccounts.js';
+import { nextMemberNo } from '../lib/onboarding.js';
 import { sendMail, appUrl } from '../lib/mailer.js';
 import { authLimiter, forgotLimiter } from '../lib/rateLimit.js';
 
@@ -18,7 +19,7 @@ const signToken = (user) =>
 
 router.post('/register', authLimiter, async (req, res) => {
   try {
-    const { firstName, lastName, email, password, phone, address, nin, bvn } = req.body;
+    const { firstName, lastName, email, password, phone, address, nin, bvn, orgId } = req.body;
     if (!firstName || !lastName || !email || !password)
       return res.status(400).json({ message: 'First name, last name, email and password are required' });
     if (password.length < 6)
@@ -33,14 +34,29 @@ router.post('/register', authLimiter, async (req, res) => {
 
     const hash = await bcrypt.hash(password, 10);
 
+    // Affiliation: requested unit/branch/department, else General Members.
+    const org = await query(
+      `SELECT id FROM organisations WHERE id = $1 AND status = 'active'`,
+      [orgId || 0]
+    );
+    const affiliationId = org.rows[0]?.id || (await query(
+      `SELECT id FROM organisations WHERE code = 'GEN'`
+    )).rows[0].id;
+
     const user = await withTransaction(async (client) => {
+      const memberNo = await nextMemberNo(client, affiliationId);
       const { rows } = await client.query(
-        `INSERT INTO users (first_name,last_name,email,password_hash,phone,address,status)
-         VALUES ($1,$2,$3,$4,$5,$6,'pending')
-         RETURNING id, first_name, last_name, email, role, status, created_at`,
-        [firstName, lastName, email.toLowerCase(), hash, phone || null, address || null]
+        `INSERT INTO users (first_name,last_name,email,password_hash,phone,address,status,member_no)
+         VALUES ($1,$2,$3,$4,$5,$6,'pending',$7)
+         RETURNING id, first_name, last_name, email, role, status, member_no, created_at`,
+        [firstName, lastName, email.toLowerCase(), hash, phone || null, address || null, memberNo]
       );
       await client.query('INSERT INTO wallets (user_id, balance) VALUES ($1, 0)', [rows[0].id]);
+      await client.query(
+        `INSERT INTO organisation_members (user_id, org_id, member_no, is_primary)
+         VALUES ($1,$2,$3,true)`,
+        [rows[0].id, affiliationId, memberNo]
+      );
       return rows[0];
     });
 
@@ -101,8 +117,11 @@ router.post('/login', authLimiter, async (req, res) => {
 router.get('/me', authenticate, asyncHandler(async (req, res) => {
   const { rows } = await query(
     `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.address, u.role,
-            u.status, u.created_at, w.balance
+            u.status, u.member_no, u.created_at, w.balance,
+            o.id AS org_id, o.name AS org_name, o.code AS org_code, o.type AS org_type
      FROM users u LEFT JOIN wallets w ON w.user_id = u.id
+     LEFT JOIN organisation_members m ON m.user_id = u.id AND m.is_primary AND m.status = 'active'
+     LEFT JOIN organisations o ON o.id = m.org_id
      WHERE u.id = $1`,
     [req.user.id]
   );

@@ -21,6 +21,7 @@ const kycVariant = { pending: 'warning', approved: 'success', rejected: 'destruc
 function KycTab() {
   const [data, setData] = useState(null);
   const [vaccount, setVaccount] = useState(null);
+  const [docs, setDocs] = useState([]);
   const [form, setForm] = useState({
     dob: '', gender: '', occupation: '', employer: '', idType: 'nin', idNumber: '',
     residentialAddress: '', nextOfKinName: '', nextOfKinPhone: '', nextOfKinRelationship: '',
@@ -31,6 +32,7 @@ function KycTab() {
   const load = () => {
     api.get('/kyc/me').then(setData).catch((e) => setMsg({ type: 'err', text: e.message }));
     api.get('/virtual-accounts/me').then(setVaccount).catch(() => setVaccount(null));
+    api.get('/kyc/documents').then(setDocs).catch(() => setDocs([]));
   };
   useEffect(() => { load(); }, []);
 
@@ -55,8 +57,34 @@ function KycTab() {
     } catch (err) { setMsg({ type: 'err', text: err.message }); }
   };
 
+  const uploadDoc = async (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setMsg(null);
+    try {
+      if (f.size > 5 * 1024 * 1024) throw new Error(`${f.name} exceeds 5MB`);
+      if (!['image/jpeg', 'image/png', 'application/pdf'].includes(f.type)) {
+        throw new Error(`${f.name}: jpg, png or pdf only`);
+      }
+      const base64 = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result).split(',')[1]);
+        r.onerror = () => reject(new Error('Could not read file'));
+        r.readAsDataURL(f);
+      });
+      await api.post('/kyc/documents', { docType: 'id_card', filename: f.name, mime: f.type, data: base64 });
+      e.target.value = '';
+      await load();
+      setMsg({ type: 'ok', text: 'Document uploaded' });
+    } catch (err) { setMsg({ type: 'err', text: err.message }); }
+  };
+
   const profile = data?.profile;
   const guarantors = data?.guarantors || [];
+  let vr = profile?.verification_result || null;
+  if (typeof vr === 'string') {
+    try { vr = JSON.parse(vr); } catch { vr = null; }
+  }
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -122,6 +150,45 @@ function KycTab() {
               <div><Label>Relationship</Label><Input value={form.nextOfKinRelationship} onChange={update('nextOfKinRelationship')} placeholder="e.g. Spouse, Brother" /></div>
               <Button type="submit">Submit for verification</Button>
             </form>
+          )}
+          {vr && (
+            <div className="mt-4 rounded-md border p-3 text-sm">
+              <p className="font-medium">
+                System checks: {vr.passed ? 'passed' : 'needs attention'}{' '}
+                <span className="text-muted-foreground">({vr.score}%)</span>
+              </p>
+              <ul className="mt-1 space-y-0.5 text-xs">
+                {vr.checks.map((c) => (
+                  <li key={c.key} className={c.passed ? 'text-muted-foreground' : 'text-destructive'}>
+                    {c.passed ? '✓' : '✗'} {c.label}{c.detail ? ` — ${c.detail}` : ''}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Identity Documents ({docs.length}/5)</CardTitle>
+          <CardDescription>ID scans or photos (jpg, png, pdf ≤ 5MB)</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {docs.map((d) => (
+            <div key={d.id} className="flex items-center justify-between text-sm border rounded-md px-3 py-2">
+              <div>
+                <p className="font-medium font-mono text-xs">{d.filename}</p>
+                <p className="text-muted-foreground text-xs">{(d.size_bytes / 1024).toFixed(0)} KB</p>
+              </div>
+              <Badge variant="outline">{d.doc_type.replaceAll('_', ' ')}</Badge>
+            </div>
+          ))}
+          {docs.length < 5 && (
+            <label className="flex items-center gap-2 rounded-md border border-dashed px-3 py-2.5 text-sm text-muted-foreground cursor-pointer hover:border-primary">
+              Upload document…
+              <input type="file" accept=".jpg,.jpeg,.png,.pdf" className="hidden" onChange={uploadDoc} />
+            </label>
           )}
         </CardContent>
       </Card>
@@ -207,6 +274,10 @@ export default function Profile() {
                 <div><Label>Last name</Label><Input value={profile.lastName} onChange={(e) => setProfile({ ...profile, lastName: e.target.value })} /></div>
               </div>
               <div><Label>Email</Label><Input value={user?.email || ''} disabled /></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><Label>Member ID</Label><Input value={user?.member_no || '—'} disabled className="font-mono" /></div>
+                <div><Label>Unit / Branch</Label><Input value={user?.org_name ? `${user.org_name} (${user.org_code})` : 'General Members'} disabled /></div>
+              </div>
               <div><Label>Phone</Label><Input value={profile.phone} onChange={(e) => setProfile({ ...profile, phone: e.target.value })} /></div>
               <div><Label>Address</Label><Textarea value={profile.address} onChange={(e) => setProfile({ ...profile, address: e.target.value })} /></div>
               <Button type="submit">Save Changes</Button>

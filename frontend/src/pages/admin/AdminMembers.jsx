@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import OnboardDialog from '@/components/OnboardDialog';
 
 export default function AdminMembers() {
   const [users, setUsers] = useState(null);
@@ -113,6 +114,7 @@ export default function AdminMembers() {
             <Input placeholder="Search members…" className="pl-9" value={q} onChange={(e) => setQ(e.target.value)} />
           </div>
           <span className="ml-auto text-sm text-muted-foreground">{filtered.length} members</span>
+          <OnboardDialog onDone={load} />
           <Button
             variant="outline" size="sm"
             onClick={() => download('/admin/export/members.csv', 'mpcs-members.csv').then(() => toast.success('Exported members')).catch((e) => toast.error(e.message))}
@@ -161,6 +163,7 @@ export default function AdminMembers() {
                     <div>
                       <p className="font-medium text-sm">{u.first_name} {u.last_name}</p>
                       <p className="text-xs text-muted-foreground">{u.email}</p>
+                      {u.member_no && <p className="text-xs font-mono text-primary">{u.member_no}</p>}
                     </div>
                   </div>
                 </TableCell>

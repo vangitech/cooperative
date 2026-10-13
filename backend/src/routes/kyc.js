@@ -3,6 +3,7 @@ import { query } from '../db.js';
 import { authenticate, requirePerm } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/helpers.js';
 import { audit } from '../lib/audit.js';
+import { verifyKyc, validateDocument } from '../lib/onboarding.js';
 import { notify } from '../lib/notify.js';
 import { assignVirtualAccount } from '../lib/virtualAccounts.js';
 
@@ -53,6 +54,23 @@ router.post(
       ]
     );
     audit(req, 'kyc.submitted', 'kyc', req.user.id, { idType });
+    // System verification pass runs on every submission — human review stays final.
+    try {
+      const docs = await query('SELECT id FROM kyc_documents WHERE user_id = $1', [req.user.id]);
+      const u = await query('SELECT phone FROM users WHERE id = $1', [req.user.id]);
+      const verification = await verifyKyc(query, {
+        userId: req.user.id, email: req.user.email, phone: u.rows[0]?.phone, dob,
+        idType, idNumber, documents: docs.rows,
+      });
+      await query(
+        `UPDATE kyc_profiles SET verification_result = $1,
+          verified_at = CASE WHEN $2 THEN NOW() ELSE NULL END WHERE user_id = $3`,
+        [JSON.stringify(verification), verification.passed, req.user.id]
+      );
+      rows[0].verification_result = verification;
+    } catch (e) {
+      console.error('kyc verification failed:', e.message);
+    }
     res.status(201).json(rows[0]);
   })
 );
@@ -96,6 +114,65 @@ router.post(
       if (e.code === '23505') return res.status(409).json({ message: 'This guarantor is already added' });
       throw e;
     }
+  })
+);
+
+/* ---------- Identity document vault (DB-backed, RLS-locked) ---------- */
+
+// Member uploads an ID scan/photo (jpg, png, pdf ≤ 5MB, base64 JSON body).
+router.post(
+  '/documents',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const { docType, filename, mime, data } = req.body || {};
+    let file;
+    try {
+      file = validateDocument({ docType, filename, mime, data });
+    } catch (e) {
+      return res.status(e.status || 400).json({ message: e.message });
+    }
+    const count = await query('SELECT COUNT(*) FROM kyc_documents WHERE user_id = $1', [req.user.id]);
+    if (Number(count.rows[0].count) >= 5)
+      return res.status(400).json({ message: 'Maximum of 5 documents' });
+    const { rows } = await query(
+      `INSERT INTO kyc_documents (user_id, doc_type, filename, mime, size_bytes, data, uploaded_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       RETURNING id, user_id, doc_type, filename, mime, size_bytes, created_at`,
+      [req.user.id, file.docType, filename, mime, file.size, file.bytes, req.user.id]
+    );
+    audit(req, 'kyc.document_uploaded', 'kyc', req.user.id, { filename, docType: file.docType });
+    res.status(201).json(rows[0]);
+  })
+);
+
+// List my documents (metadata only — bytes stream separately).
+router.get(
+  '/documents',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const { rows } = await query(
+      `SELECT id, doc_type, filename, mime, size_bytes, created_at
+       FROM kyc_documents WHERE user_id = $1 ORDER BY created_at`,
+      [req.user.id]
+    );
+    res.json(rows);
+  })
+);
+
+// Download one document: owner, or staff with kyc.review.
+router.get(
+  '/documents/:id',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    const { rows } = await query('SELECT * FROM kyc_documents WHERE id = $1', [req.params.id]);
+    const doc = rows[0];
+    if (!doc) return res.status(404).json({ message: 'Document not found' });
+    const staff = ['admin', 'officer', 'accountant'].includes(req.user.role);
+    if (doc.user_id !== req.user.id && !staff)
+      return res.status(403).json({ message: 'Insufficient permissions' });
+    res.setHeader('Content-Type', doc.mime);
+    res.setHeader('Content-Disposition', `inline; filename="${doc.filename}"`);
+    res.send(doc.data);
   })
 );
 

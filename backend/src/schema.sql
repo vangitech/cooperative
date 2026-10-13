@@ -367,3 +367,72 @@ CREATE INDEX IF NOT EXISTS idx_audit_outcome ON audit_logs(outcome);
 -- Belt-and-braces (RLS + REVOKE ALL above already deny these): the audit log
 -- must be insert-only for every human-held role, even if grants change later.
 REVOKE UPDATE, DELETE, TRUNCATE ON audit_logs FROM anon, authenticated;
+
+-- Onboarding + affiliation: organisations (branches, employers, departments,
+-- units, trade associations, markets), member numbering, KYC document vault.
+CREATE TABLE IF NOT EXISTS organisations (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(160) NOT NULL,
+  code VARCHAR(20) UNIQUE NOT NULL,
+  type VARCHAR(40) NOT NULL DEFAULT 'cooperative_branch',
+  parent_id INTEGER REFERENCES organisations(id) ON DELETE SET NULL,
+  contact_name VARCHAR(160),
+  contact_phone VARCHAR(30),
+  address TEXT,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS organisation_members (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  org_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+  member_no VARCHAR(40) UNIQUE NOT NULL,
+  is_primary BOOLEAN NOT NULL DEFAULT true,
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  verified_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(user_id, org_id)
+);
+
+CREATE TABLE IF NOT EXISTS org_counters (
+  org_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+  year INTEGER NOT NULL,
+  last_seq INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (org_id, year)
+);
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS member_no VARCHAR(40) UNIQUE;
+
+ALTER TABLE kyc_profiles ADD COLUMN IF NOT EXISTS id_document_url TEXT;
+ALTER TABLE kyc_profiles ADD COLUMN IF NOT EXISTS verification_result JSONB;
+ALTER TABLE kyc_profiles ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS kyc_documents (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  doc_type VARCHAR(40) NOT NULL DEFAULT 'id_card',
+  filename VARCHAR(255) NOT NULL,
+  mime VARCHAR(100) NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  data BYTEA NOT NULL,
+  uploaded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_docs_user ON kyc_documents(user_id);
+
+-- Default catch-all organisation for general (unaffiliated) members.
+INSERT INTO organisations (name, code, type, status)
+VALUES ('General Members', 'GEN', 'general', 'active')
+ON CONFLICT (code) DO NOTHING;
+
+-- Same lockdown as the core tables (this block runs after creation).
+ALTER TABLE public.organisations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.organisation_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.org_counters ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.kyc_documents ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.organisations FROM anon, authenticated;
+REVOKE ALL ON TABLE public.organisation_members FROM anon, authenticated;
+REVOKE ALL ON TABLE public.org_counters FROM anon, authenticated;
+REVOKE ALL ON TABLE public.kyc_documents FROM anon, authenticated;

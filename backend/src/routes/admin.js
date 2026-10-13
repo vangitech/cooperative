@@ -1,8 +1,12 @@
 import express from 'express';
+import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import { query, withTransaction } from '../db.js';
 import { authenticate, requirePerm } from '../middleware/auth.js';
 import { generateRef, toMoney, isPositiveNumber, asyncHandler, sendCsv } from '../utils/helpers.js';
 import { audit, auditTx } from '../lib/audit.js';
+import { nextMemberNo, verifyKyc, validateDocument, ID_TYPES } from '../lib/onboarding.js';
+import { assignVirtualAccount } from '../lib/virtualAccounts.js';
 import { ensureSchedules } from '../lib/loans.js';
 import { notify } from '../lib/notify.js';
 import { settleDueCollections } from '../lib/collections.js';
@@ -44,14 +48,17 @@ router.get('/stats', requirePerm('overview.read'), asyncHandler(async (req, res)
 /* ---------- Members ---------- */
 router.get('/users', requirePerm('members.read'), asyncHandler(async (req, res) => {
   const { rows } = await query(`
-    SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.role, u.status, u.created_at,
+    SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.role, u.status, u.member_no, u.created_at,
            COALESCE(w.balance,0) AS balance,
            (SELECT COALESCE(SUM(amount),0) FROM savings s WHERE s.user_id=u.id) AS total_savings,
            k.status AS kyc_status,
-           v.account_number AS funding_account, v.bank_name AS funding_bank
+           v.account_number AS funding_account, v.bank_name AS funding_bank,
+           o.name AS org_name, o.code AS org_code
     FROM users u LEFT JOIN wallets w ON w.user_id = u.id
     LEFT JOIN kyc_profiles k ON k.user_id = u.id
     LEFT JOIN virtual_accounts v ON v.user_id = u.id
+    LEFT JOIN organisation_members m ON m.user_id = u.id AND m.is_primary AND m.status = 'active'
+    LEFT JOIN organisations o ON o.id = m.org_id
     ORDER BY u.created_at DESC
   `);
   res.json(rows);
@@ -93,6 +100,168 @@ router.patch('/users/:id/role', requirePerm('*'), asyncHandler(async (req, res) 
   audit(req, `member.role_${role}`, 'user', req.params.id, {});
   res.json(rows[0]);
 }));
+
+/* ---------- Staff-assisted onboarding (admin/officer creates member + KYC) ---------- */
+// One atomic call: user + wallet + member number + affiliation + KYC profile +
+// guarantors + identity documents, then the system verification pass.
+// Password: supplied (min 6) or a one-time temp password returned in the
+// response for the officer to hand over in person. KYC auto-approval is
+// admin-only (separation of duties: officers capture, admins approve).
+router.post('/users', requirePerm('members.create'), async (req, res) => {
+  try {
+    const {
+      firstName, lastName, email, phone, address, password, orgId,
+      status = 'pending', autoApproveKyc = false,
+      kyc = {}, guarantors = [], documents = [],
+    } = req.body;
+
+    if (!firstName || !lastName || !email)
+      return res.status(400).json({ message: 'First name, last name and email are required' });
+    if (password && password.length < 6)
+      return res.status(400).json({ message: 'Password must be at least 6 characters' });
+    if (!['pending', 'active'].includes(status))
+      return res.status(400).json({ message: 'Status must be pending or active' });
+    if (autoApproveKyc && req.user.role !== 'admin')
+      return res.status(403).json({ message: 'Only admins can auto-approve KYC' });
+
+    const exists = await query('SELECT id FROM users WHERE email = $1', [String(email).toLowerCase()]);
+    if (exists.rows.length) return res.status(409).json({ message: 'Email already registered' });
+
+    const {
+      dob, gender, occupation, employer, idType, idNumber,
+      residentialAddress, nextOfKinName, nextOfKinPhone, nextOfKinRelationship,
+    } = kyc;
+    const kycGiven = idType || idNumber || nextOfKinName || nextOfKinPhone || dob;
+    if (kycGiven) {
+      if (!idType || !ID_TYPES.includes(idType))
+        return res.status(400).json({ message: `ID type must be one of: ${ID_TYPES.join(', ')}` });
+      if (!idNumber) return res.status(400).json({ message: 'ID number is required' });
+      if (idType === 'nin' && !/^\d{11}$/.test(String(idNumber).trim()))
+        return res.status(400).json({ message: 'NIN must be exactly 11 digits' });
+      if (!nextOfKinName || !nextOfKinPhone)
+        return res.status(400).json({ message: 'Next of kin name and phone are required' });
+    }
+    if (guarantors.length > 2)
+      return res.status(400).json({ message: 'Maximum of 2 guarantors' });
+    for (const g of guarantors) {
+      if (!g.fullName || !g.phone)
+        return res.status(400).json({ message: 'Each guarantor needs a name and phone' });
+    }
+    if (documents.length > 5)
+      return res.status(400).json({ message: 'Maximum of 5 documents' });
+    const files = documents.map(validateDocument);
+
+    const tempPassword = password || crypto.randomBytes(9).toString('base64url');
+    const hash = await bcrypt.hash(tempPassword, 10);
+
+    const result = await withTransaction(async (client) => {
+      const org = await client.query(
+        `SELECT id FROM organisations WHERE id = $1 AND status = 'active'`, [orgId || 0]
+      );
+      const affiliationId = org.rows[0]?.id || (await client.query(
+        `SELECT id FROM organisations WHERE code = 'GEN'`
+      )).rows[0].id;
+      const memberNo = await nextMemberNo(client, affiliationId);
+
+      const u = await client.query(
+        `INSERT INTO users (first_name,last_name,email,password_hash,phone,address,status,member_no)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         RETURNING id, first_name, last_name, email, phone, role, status, member_no, created_at`,
+        [firstName, lastName, String(email).toLowerCase(), hash, phone || null, address || null, status, memberNo]
+      );
+      const user = u.rows[0];
+      await client.query('INSERT INTO wallets (user_id, balance) VALUES ($1, 0)', [user.id]);
+      await client.query(
+        `INSERT INTO organisation_members (user_id, org_id, member_no, is_primary, verified_by)
+         VALUES ($1,$2,$3,true,$4)`,
+        [user.id, affiliationId, memberNo, req.user.id]
+      );
+
+      let kycRow = null;
+      let verification = null;
+      if (kycGiven) {
+        const k = await client.query(
+          `INSERT INTO kyc_profiles
+             (user_id, dob, gender, occupation, employer, id_type, id_number,
+              residential_address, next_of_kin_name, next_of_kin_phone,
+              next_of_kin_relationship, status)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'pending')
+           RETURNING *`,
+          [user.id, dob || null, gender || null, occupation || null, employer || null,
+           idType, String(idNumber).trim(), residentialAddress || null,
+           nextOfKinName, nextOfKinPhone, nextOfKinRelationship || null]
+        );
+        kycRow = k.rows[0];
+        verification = await verifyKyc(client, {
+          userId: user.id, email: user.email, phone: user.phone, dob,
+          idType, idNumber, documents: files,
+        });
+        const approved = autoApproveKyc && verification.passed;
+        const v = await client.query(
+          `UPDATE kyc_profiles
+           SET verification_result = $1, verified_at = CASE WHEN $2 THEN NOW() ELSE NULL END,
+               status = CASE WHEN $2 THEN 'approved' ELSE 'pending' END,
+               reviewed_by = CASE WHEN $2 THEN $3::integer ELSE NULL END,
+               reviewed_at = CASE WHEN $2 THEN NOW() ELSE NULL END
+           WHERE user_id = $4 RETURNING *`,
+          [JSON.stringify(verification), approved, req.user.id, user.id]
+        );
+        kycRow = v.rows[0];
+      }
+
+      const kin = [];
+      for (const g of guarantors) {
+        const r = await client.query(
+          `INSERT INTO guarantors (user_id, full_name, phone, email, relationship)
+           VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+          [user.id, g.fullName, g.phone, g.email || null, g.relationship || null]
+        );
+        kin.push(r.rows[0]);
+      }
+
+      const docs = [];
+      files.forEach((f, i) => docs.push({ ...f, filename: documents[i].filename, mime: documents[i].mime }));
+      for (const f of docs) {
+        await client.query(
+          `INSERT INTO kyc_documents (user_id, doc_type, filename, mime, size_bytes, data, uploaded_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [user.id, f.docType, f.filename, f.mime, f.size, f.bytes, req.user.id]
+        );
+      }
+
+      await auditTx(client, req, 'member.onboarded', 'user', user.id,
+        { email: user.email, memberNo, orgId: affiliationId, status, kyc: !!kycRow,
+          verification: verification ? { passed: verification.passed, score: verification.score } : null,
+          guarantors: kin.length, documents: docs.length });
+      if (kycRow) {
+        await auditTx(client, req, 'kyc.submitted', 'kyc', user.id,
+          { idType, by: 'staff' },
+          { before: null, after: { status: kycRow.status }, actorId: req.user.id });
+      }
+      return { user, kyc: kycRow, verification, guarantors: kin, affiliationId, memberNo,
+               docCount: docs.length };
+    });
+
+    // Funding account number: best-effort (member ID is instant; account follows).
+    let virtualAccount = null;
+    try {
+      const nin = /^\d{11}$/.test(String(kyc.idNumber || '').trim()) ? String(kyc.idNumber).trim() : undefined;
+      virtualAccount = await assignVirtualAccount(result.user.id, { nin });
+    } catch (e) {
+      console.error('virtual account deferred:', e.message);
+    }
+
+    const { password_hash, ...safeUser } = result.user;
+    res.status(201).json({
+      ...result, user: safeUser,
+      tempPassword: password ? undefined : tempPassword,
+      virtualAccount,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(e.status || 400).json({ message: e.message || 'Onboarding failed' });
+  }
+});
 
 /* ---------- Transactions ---------- */
 router.get('/transactions', requirePerm('transactions.read'), asyncHandler(async (req, res) => {

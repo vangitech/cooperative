@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
+import { api } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -12,10 +13,15 @@ export default function Register() {
   const { register, logout } = useAuth();
   const navigate = useNavigate();
   const [form, setForm] = useState({
-    firstName: '', lastName: '', email: '', password: '', phone: '', address: '', nin: '',
+    firstName: '', lastName: '', email: '', password: '', phone: '', address: '', nin: '', orgId: '',
   });
+  const [orgs, setOrgs] = useState([]);
   const [error, setError] = useState('');
   const [pending, setPending] = useState(null); // { virtualAccount } on approval-pending signup
+
+  useEffect(() => {
+    api.get('/orgs').then(setOrgs).catch(() => setOrgs([]));
+  }, []);
   const [loading, setLoading] = useState(false);
 
   const update = (k) => (e) => setForm({ ...form, [k]: e.target.value });
@@ -28,7 +34,7 @@ export default function Register() {
       if (data.user.status !== 'active') {
         // Membership needs admin approval — don't enter the app yet.
         logout();
-        setPending({ virtualAccount: data.virtualAccount || null });
+        setPending({ virtualAccount: data.virtualAccount || null, memberNo: data.user.member_no });
       } else {
         navigate('/dashboard');
       }
@@ -63,6 +69,9 @@ export default function Register() {
                 <div className="text-sm bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300 p-4 rounded-md">
                   Application received. An admin will review it shortly —
                   you'll be able to sign in once approved.
+                  {pending.memberNo && (
+                    <p className="mt-2 font-semibold">Your member ID: <span className="font-mono">{pending.memberNo}</span></p>
+                  )}
                 </div>
                 {pending.virtualAccount ? (
                   <div className="text-sm border rounded-md p-4 space-y-1">
@@ -87,6 +96,19 @@ export default function Register() {
                 <div><Label>Last name</Label><Input required value={form.lastName} onChange={update('lastName')} /></div>
               </div>
               <div><Label>Email</Label><Input type="email" required value={form.email} onChange={update('email')} /></div>
+              <div>
+                <Label>Unit / Branch / Department</Label>
+                <select
+                  className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm"
+                  value={form.orgId} onChange={update('orgId')}
+                >
+                  <option value="">General Members</option>
+                  {orgs.map((o) => (
+                    <option key={o.id} value={o.id}>{o.name} ({o.code})</option>
+                  ))}
+                </select>
+                <p className="text-xs text-muted-foreground mt-1">Your employer, market, association or cooperative branch — used for payroll deductions.</p>
+              </div>
               <div><Label>Phone</Label><Input value={form.phone} onChange={update('phone')} /></div>
               <div><Label>Address</Label><Textarea rows={2} value={form.address} onChange={update('address')} /></div>
               <div><Label>Password</Label><Input type="password" required value={form.password} onChange={update('password')} placeholder="Min 6 characters" /></div>

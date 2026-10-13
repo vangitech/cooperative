@@ -18,6 +18,7 @@ import storeRoutes from './routes/store.js';
 import announcementRoutes from './routes/announcements.js';
 import planRoutes from './routes/plans.js';
 import reportsRoutes from './routes/reports.js';
+import orgsRoutes from './routes/orgs.js';
 
 for (const key of ['DATABASE_URL', 'JWT_SECRET']) {
   if (!process.env[key]) {
@@ -30,7 +31,7 @@ const app = express();
 app.set('trust proxy', 1); // correct req.ip behind Vercel / proxies
 
 app.use(cors({ origin: process.env.CLIENT_URL?.split(',') || '*' }));
-app.use(express.json());
+app.use(express.json({ limit: '10mb' })); // KYC document uploads (base64) need headroom
 
 app.get('/api/health', (_, res) => res.json({ ok: true, service: 'MPCS API' }));
 
@@ -49,6 +50,7 @@ app.use('/api/store', storeRoutes);
 app.use('/api/announcements', announcementRoutes);
 app.use('/api/plans', planRoutes);
 app.use('/api/admin/reports', reportsRoutes);
+app.use('/api/orgs', orgsRoutes);
 
 // 404
 app.use((req, res) => res.status(404).json({ message: 'Route not found' }));
