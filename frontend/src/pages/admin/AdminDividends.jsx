@@ -64,7 +64,7 @@ export default function AdminDividends() {
 
   return (
     <>
-      <div className="grid gap-6 lg:grid-cols-3">
+      <div className="grid gap-4 lg:grid-cols-3">
         {/* Declare form */}
         <Card className="h-fit">
           <CardHeader>

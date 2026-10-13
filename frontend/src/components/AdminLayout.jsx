@@ -11,6 +11,7 @@ import AdminActivityBell from '@/components/AdminActivityBell';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { Breadcrumb } from '@/components/ui/breadcrumb';
 import { TooltipProvider } from '@/components/ui/tooltip';
+import ThemeToggle from '@/components/ThemeToggle';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
@@ -18,6 +19,7 @@ import {
 import {
   LayoutDashboard, Users, HandCoins, TrendingUp, Receipt,
   Menu, LogOut, User as UserIcon, Shield, Home, Search, ScrollText, Store, Megaphone,
+  PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react';
 
 const adminNav = [
@@ -42,34 +44,43 @@ const routeTitles = {
   '/admin/notices': 'Notices',
 };
 
-function SidebarContent({ onNavigate, role }) {
+function SidebarContent({ onNavigate, role, collapsed }) {
   const items = adminNav.filter((n) => !n.roles || n.roles.includes(role));
   return (
     <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
       {/* Brand */}
-      <div className="h-16 flex items-center gap-2.5 px-5 border-b border-sidebar-border/60">
-        <div className="h-8 w-8 rounded-lg bg-primary text-primary-foreground grid place-items-center font-bold">
+      <div className={cn(
+        'h-16 flex items-center gap-2.5 border-b border-sidebar-border/60',
+        collapsed ? 'justify-center px-2' : 'px-5',
+      )}>
+        <div className="h-8 w-8 shrink-0 rounded-lg bg-primary text-primary-foreground grid place-items-center font-bold">
           M
         </div>
-        <div className="leading-tight">
-          <p className="font-semibold text-sm">MPCS</p>
-          <p className="text-[11px] text-muted-foreground">Admin Console</p>
-        </div>
+        {!collapsed && (
+          <div className="leading-tight">
+            <p className="font-semibold text-sm">MPCS</p>
+            <p className="text-[11px] text-muted-foreground">Admin Console</p>
+          </div>
+        )}
       </div>
 
       {/* Nav */}
       <ScrollArea className="flex-1">
-        <nav className="p-3 space-y-0.5">
-          <p className="px-3 py-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-            Management
-          </p>
+        <nav className={cn('space-y-0.5', collapsed ? 'p-2' : 'p-3')}>
+          {!collapsed && (
+            <p className="px-3 py-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              Management
+            </p>
+          )}
           {items.map(({ to, label, icon: Icon, exact }) => (
             <NavLink
               key={to} to={to} end={exact}
               onClick={onNavigate}
+              title={collapsed ? label : undefined}
               className={({ isActive }) =>
                 cn(
                   'group flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
+                  collapsed && 'justify-center px-0',
                   isActive
                     ? 'bg-primary text-primary-foreground shadow-sm'
                     : 'text-muted-foreground hover:bg-accent hover:text-foreground'
@@ -77,7 +88,7 @@ function SidebarContent({ onNavigate, role }) {
               }
             >
               <Icon className="h-4 w-4 shrink-0" />
-              <span className="truncate">{label}</span>
+              {!collapsed && <span className="truncate">{label}</span>}
             </NavLink>
           ))}
 
@@ -86,10 +97,13 @@ function SidebarContent({ onNavigate, role }) {
             to="/dashboard"
             onClick={onNavigate}
             title="Preview member experience"
-            className="group flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors text-muted-foreground hover:bg-accent hover:text-foreground"
+            className={cn(
+              'group flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors text-muted-foreground hover:bg-accent hover:text-foreground',
+              collapsed && 'justify-center px-0',
+            )}
           >
             <Home className="h-4 w-4 shrink-0" />
-            <span className="truncate">View as Member</span>
+            {!collapsed && <span className="truncate">View as Member</span>}
           </NavLink>
         </nav>
       </ScrollArea>
@@ -102,23 +116,35 @@ export default function AdminLayout() {
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(
+    () => localStorage.getItem('mpcs:admin:collapsed') === '1',
+  );
 
   const title = routeTitles[location.pathname] || 'Admin';
 
   const handleLogout = () => { logout(); navigate('/login'); };
+  const toggleCollapsed = () => {
+    setCollapsed((c) => {
+      localStorage.setItem('mpcs:admin:collapsed', c ? '0' : '1');
+      return !c;
+    });
+  };
 
   return (
     <TooltipProvider delayDuration={200}>
-      <div className="min-h-screen flex bg-muted/30">
+      <div className="min-h-screen flex bg-muted/40 dark:bg-background">
         {/* Desktop sidebar */}
-        <aside className="hidden md:flex w-64 shrink-0 border-r bg-sidebar">
-          <SidebarContent role={user?.role} />
+        <aside className={cn(
+          'hidden md:flex shrink-0 border-r bg-sidebar transition-all duration-200 ease-in-out',
+          collapsed ? 'w-[76px]' : 'w-64',
+        )}>
+          <SidebarContent role={user?.role} collapsed={collapsed} />
         </aside>
 
         <div className="flex-1 flex flex-col min-w-0">
           {/* Topbar */}
           <header className="h-16 border-b bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-30">
-            <div className="flex h-full items-center gap-3 px-4 md:px-6">
+            <div className="flex h-full items-center gap-2 px-4 md:px-6">
               {/* Mobile menu */}
               <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
                 <SheetTrigger asChild>
@@ -130,6 +156,17 @@ export default function AdminLayout() {
                   <SidebarContent role={user?.role} onNavigate={() => setMobileOpen(false)} />
                 </SheetContent>
               </Sheet>
+
+              {/* Desktop collapse toggle */}
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={toggleCollapsed}
+                title={collapsed ? 'Expand menu' : 'Collapse menu'}
+                className="hidden md:inline-flex"
+              >
+                {collapsed ? <PanelLeftOpen className="h-5 w-5" /> : <PanelLeftClose className="h-5 w-5" />}
+              </Button>
 
               <div className="min-w-0">
                 <Breadcrumb
@@ -153,6 +190,8 @@ export default function AdminLayout() {
                 </button>
 
                 <AdminActivityBell />
+
+                <ThemeToggle />
 
                 <Separator orientation="vertical" className="h-8" />
 
@@ -194,9 +233,11 @@ export default function AdminLayout() {
             </div>
           </header>
 
-          {/* Content */}
-          <main className="flex-1 p-4 md:p-6 overflow-auto">
-            <Outlet />
+          {/* Content — single consistent container for every admin page */}
+          <main className="flex-1 overflow-auto">
+            <div className="mx-auto w-full max-w-7xl space-y-6 p-4 md:p-6 lg:p-8">
+              <Outlet />
+            </div>
           </main>
         </div>
       </div>

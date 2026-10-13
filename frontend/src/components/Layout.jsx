@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import NotificationsBell from '@/components/NotificationsBell';
+import ThemeToggle from '@/components/ThemeToggle';
 
 const memberNav = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -88,6 +89,7 @@ export default function Layout() {
             <span className="text-sm text-muted-foreground hidden sm:block mr-2">
               Welcome back, {user?.first_name}
             </span>
+            <ThemeToggle />
             <NotificationsBell />
           </div>
         </header>
