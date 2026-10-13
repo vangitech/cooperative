@@ -232,22 +232,23 @@ router.post('/transfer', asyncHandler(async (req, res) => {
     await client.query('UPDATE wallets SET balance = $1, updated_at = NOW() WHERE id = $2', [
       toBalance, to.rows[0].id,
     ]);
-    await client.query(
+    const outTx = await client.query(
       `INSERT INTO transactions (user_id, wallet_id, type, amount, balance_after, reference, description)
        VALUES ($1,$2,'transfer_out',$3,$4,$5,$6) RETURNING *`,
       [req.user.id, from.rows[0].id, amt, fromBalance, ref, `Transfer to ${target.first_name} ${target.last_name}`]
-    ).then(async (r) => {
-      await postJournal(client, req, { type: 'transfer_out', transactionId: r.rows[0].id,
-        reference: ref, amount: amt, direction: 'out' });
-    });
+    );
     await client.query(
       `INSERT INTO transactions (user_id, wallet_id, type, amount, balance_after, reference, description)
-       VALUES ($1,$2,'transfer_in',$3,$4,$5,$6) RETURNING *`,
+       VALUES ($1,$2,'transfer_in',$3,$4,$5,$6)`,
       [target.id, to.rows[0].id, amt, toBalance, `${ref}-IN`, `Transfer from ${req.user.first_name} ${req.user.last_name}`]
-    ).then(async (r) => {
-      await postJournal(client, req, { type: 'transfer_in', transactionId: r.rows[0].id,
-        reference: `${ref}-IN`, amount: amt, direction: 'in' });
-    });
+    );
+    // One entry, no float touched: sender claim down, recipient claim up.
+    await postJournal(client, req, { type: 'transfer', transactionId: outTx.rows[0].id,
+      reference: ref, amount: amt,
+      lines: [
+        { code: '1100', debit: amt, credit: 0 },
+        { code: '1100', debit: 0, credit: amt },
+      ] });
     await client.query(
       `INSERT INTO notifications (user_id, title, body, link) VALUES ($1,$2,$3,$4)`,
       [target.id, 'Money received', `${req.user.first_name} ${req.user.last_name} sent you ${amt} NGN.`, '/wallet']

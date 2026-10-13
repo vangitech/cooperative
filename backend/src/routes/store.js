@@ -169,7 +169,11 @@ router.post(
           { before: { status: c.status, amount_paid: Number(c.amount_paid), balance: Number(w.rows[0].balance) },
             after: { status: newStatus, amount_paid: newPaid, balance: newBalance } });
         await postJournal(client, req, { type: 'collection_repayment', transactionId: tx.rows[0].id,
-          reference: tx.rows[0].reference, amount: amt, direction: 'out' });
+          reference: tx.rows[0].reference, amount: amt,
+          lines: [
+            { code: '1100', debit: amt, credit: 0 },
+            { code: '1210', debit: 0, credit: amt },
+          ] });
         return { transaction: tx.rows[0], amountPaid: newPaid, balance: newBalance };
       });
       res.json(result);
@@ -268,10 +272,17 @@ router.patch(
           `INSERT INTO transactions (user_id, wallet_id, type, amount, balance_after, reference, description)
            VALUES ($1,$2,'collection_down',$3,$4,$5,$6) RETURNING *`,
           [c.user_id, w.rows[0].id, down, newBalance, generateRef('CLD'), `Down payment: collection #${c.id}`]
-        ).then(async (t) => {
-          await postJournal(client, req, { type: 'collection_down', transactionId: t.rows[0].id,
-            reference: t.rows[0].reference, amount: down, direction: 'out' });
-        });
+        );
+        // Receivable booked at release; markup recognised here (simple policy —
+        // follow-up: accrue monthly over the term instead).
+        const markup = toMoney(Number(r.rows[0].total_repayable) - down);
+        await postJournal(client, req, { type: 'collection_released',
+          reference: `collection #${c.id}`, amount: Number(r.rows[0].total_repayable),
+          lines: [
+            { code: '1210', debit: Number(r.rows[0].total_repayable), credit: 0 },
+            { code: '1100', debit: 0, credit: down },
+            { code: '4003', debit: 0, credit: markup },
+          ].filter((l) => l.debit > 0 || l.credit > 0) });
         await client.query('UPDATE store_products SET stock = stock - $1 WHERE id = $2', [
           c.quantity, c.product_id,
         ]);

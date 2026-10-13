@@ -3,24 +3,9 @@
 Goal: make the cooperative's audit trail immutable, tamper-evident and
 regulator-exportable.
 
-## Priority 1 — Append-only hardening + richer columns
-- `REVOKE UPDATE, DELETE ON audit_logs` from every human-held role (inserts only, by the app).
-- Add columns: `actor_role` (role at time of action), `before` + `after`
-  (JSONB state snapshots for money fields), `user_agent`, `channel`, `outcome`
-  (success / failure).
-- Acceptance: old rows cannot be edited; every new entry carries role + outcome.
-
-## Priority 2 — Money-event audits inside the DB transaction
-- Move audit writes for wallet/loan/dividend/fund flows into the same
-  transaction as the money movement (guaranteed, never silently dropped).
-- Keep fire-and-forget only for low-stakes events.
-- Acceptance: crash/load test loses zero money-event entries.
-
-## Priority 3 — Failure + config-change logging
-- Log failed logins, permission denials, rejected payments.
-- Log loan-product / rate / fee config changes (currently invisible).
-- Log bulk export downloads (who pulled the member list / ledgers).
-- Acceptance: red-team walkthrough shows attacker + treasurer traces.
+> Done and moved to `updatedone v1.md`: Priority 1 (append-only + columns),
+> Priority 2 (transactional money audits), Priority 3 (failure/config/export
+> logging).
 
 ## Priority 4 — Hash-chain tamper evidence
 - Each row stores `row_hash = sha256(prev_hash + payload)`; verify endpoint/job.
@@ -35,18 +20,9 @@ the existing wallet ledger. Members see no change; accountants gain real
 financial statements. Own ledger stays the system of record; bank/MFB CBS
 connections are settlement rails, not replacements.
 
-## L1 — Chart of accounts + journals core
-- `accounts` table (code, name, type: asset/liability/income/expense, scoped per provider where needed). Seed: member-wallets control, settlement float (per provider), savings/dividends/fixed payables, interest/penalty/markup/fee income.
-- `journal_entries` (sequential entry no, period YYYY-MM, debit/credit account, amount, currency, source `transaction_id`, status, actor/role/outcome, `org_id`).
-- `postJournal()` helper called inside the same DB transaction as every money movement.
-- In-transaction invariant: legs must sum to zero or the movement aborts.
-- Acceptance: every wallet movement has balanced journal legs; no unbalanced commit possible.
-
-## L2 — Posting templates per movement type
-- Savings, deposit, withdrawal, transfer, loan disbursal (principal vs interest split on repayments), dividends, penalties, store down-payments/repayments, fixed lock/claim/break, refunds, adjustments.
-- Reversals only (linked reversing entries); maker-checker for manual adjustments (officer proposes → admin approves).
-- Period locking (closed months reject backdated posts), year rollover with opening balances.
-- Acceptance: each type posts correct legs; adjustment without approval impossible.
+> Done and moved to `updatedone v1.md`: L1 (chart + journals core, live),
+> L2 (posting templates, maker-checker, period locks, live), Migration
+> (history backfilled + disclosed ₦1,500 opening adjustment).
 
 ## L3 — Reconciliation engine + suspense
 - Nightly internal check (Σ wallets = control account; Σ debits = Σ credits) and external check (settlement float = provider statement).
@@ -61,9 +37,6 @@ connections are settlement rails, not replacements.
 ## L5 — Financial statements in the reports pack
 - Trial balance, P&L, balance sheet (plus existing 7 reports), org/branch slicing.
 - Acceptance: trial balance zeroes; wallet sums match control account at go-live.
-
-## Migration
-- One-time backfill replays existing `transactions` as dated opening entries, then dual-write live. Go-live proof required before switchover.
 
 ---
 

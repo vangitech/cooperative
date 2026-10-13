@@ -124,7 +124,10 @@ export async function settleDueCollections(withTransaction, userId) {
         ).then(async (t) => {
           await postJournal(client, systemReq, { type: 'collection_repayment',
             transactionId: t.rows[0].id, reference: t.rows[0].reference, amount: pay,
-            direction: 'out', channel: SYSTEM_CHANNEL });
+            lines: [
+              { code: '1100', debit: pay, credit: 0 },
+              { code: '1210', debit: 0, credit: pay },
+            ], channel: SYSTEM_CHANNEL });
         });
         await allocateCollectionPayment(client, c.id, pay);
 

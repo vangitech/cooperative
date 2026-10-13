@@ -1,15 +1,16 @@
 import { query } from '../db.js';
 
-// L1 double-entry core. Every member-wallet movement posts one balanced
-// header + two mirror lines (control ↔ settlement float):
-//   wallet credited (money in)  → Dr Settlement Float / Cr Wallets Control
-//   wallet debited (money out)  → Dr Wallets Control / Cr Settlement Float
-// L2 adds earmark/income-split legs on top; this schema already supports
-// N lines per entry, so no migration is needed for that.
+// Double-entry core. Two modes:
+//   Simple mirror (L1): { direction: 'in'|'out', settlement }
+//     wallet credited → Dr Settlement Float / Cr Wallets Control
+//     wallet debited  → Dr Wallets Control / Cr Settlement Float
+//   Explicit legs (L2): { lines: [{ code, debit, credit }] }
+//     for earmarks (lock, plan runs), income splits (repayments),
+//     receivables (disbursal, store), distributions (dividends).
 //
+// Rules enforced on every post: positive amounts, balanced legs
+// (±0.005), active accounts, open period, idempotent source.
 // Must be called with the SAME client as the money movement (atomic).
-// Idempotent: UNIQUE(source_transaction_id) means retries and webhook
-// replays return the existing entry instead of double-posting.
 
 const CONTROL = '1100';
 
@@ -29,15 +30,51 @@ export function periodOf(date = new Date()) {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
+async function assertOpenPeriod(client, period) {
+  const { rows } = await client.query('SELECT period FROM close_periods WHERE period = $1', [period]);
+  if (rows[0]) throw new Error(`Accounting period ${period} is closed`);
+}
+
 export async function postJournal(client, req, {
   type, transactionId = null, reference = null, amount,
-  direction, settlement = '1001', orgId = null, channel = null, postedAt = null,
+  direction, settlement = '1001', lines = null, orgId = null,
+  channel = null, postedAt = null, reversalOf = null,
 }) {
-  const amt = Number(amount);
-  if (!(amt > 0)) throw new Error('Journal amount must be positive');
-  if (direction !== 'in' && direction !== 'out') throw new Error('Journal direction must be in|out');
+  let legs;
+  if (lines) {
+    if (!Array.isArray(lines) || lines.length < 2) throw new Error('Journal needs at least 2 lines');
+    legs = [];
+    for (const l of lines) {
+      const dr = Number(l.debit || 0);
+      const cr = Number(l.credit || 0);
+      if (!(dr > 0) && !(cr > 0)) throw new Error('Each journal line needs a debit or credit');
+      if (dr > 0 && cr > 0) throw new Error('A journal line cannot debit and credit');
+      legs.push({ accountId: await accountId(client, l.code), dr, cr });
+    }
+  } else {
+    const amt = Number(amount);
+    if (!(amt > 0)) throw new Error('Journal amount must be positive');
+    if (direction !== 'in' && direction !== 'out') throw new Error('Journal direction must be in|out');
+    const debitCode = direction === 'in' ? settlement : CONTROL;
+    const creditCode = direction === 'in' ? CONTROL : settlement;
+    const [debitId, creditId] = await Promise.all([
+      accountId(client, debitCode), accountId(client, creditCode),
+    ]);
+    legs = [
+      { accountId: debitId, dr: amt, cr: 0 },
+      { accountId: creditId, dr: 0, cr: amt },
+    ];
+  }
 
-  // Idempotency first: a replay returns the original entry, no duplicate.
+  // Invariant: legs must sum to zero or the whole money movement aborts.
+  const dr = legs.reduce((s, l) => s + l.dr, 0);
+  const cr = legs.reduce((s, l) => s + l.cr, 0);
+  if (Math.abs(dr - cr) > 0.005) throw new Error('Unbalanced journal legs rejected');
+
+  const period = periodOf(postedAt || new Date());
+  await assertOpenPeriod(client, period);
+
+  // Idempotency: a replay returns the original entry, no duplicate.
   if (transactionId) {
     const dup = await client.query('SELECT id, entry_no FROM journal_entries WHERE source_transaction_id = $1', [
       transactionId,
@@ -45,41 +82,51 @@ export async function postJournal(client, req, {
     if (dup.rows[0]) return { ...dup.rows[0], duplicate: true };
   }
 
-  const debitCode = direction === 'in' ? settlement : CONTROL;
-  const creditCode = direction === 'in' ? CONTROL : settlement;
-  const [debitId, creditId] = await Promise.all([
-    accountId(client, debitCode), accountId(client, creditCode),
-  ]);
-
-  // Invariant: legs must sum to zero or the whole money movement aborts.
-  const legs = [
-    { account: debitId, dr: amt, cr: 0 },
-    { account: creditId, dr: 0, cr: amt },
-  ];
-  const dr = legs.reduce((s, l) => s + l.dr, 0);
-  const cr = legs.reduce((s, l) => s + l.cr, 0);
-  if (Math.abs(dr - cr) > 0.005) throw new Error('Unbalanced journal legs rejected');
-
   const h = await client.query(
     `INSERT INTO journal_entries
        (period, source_type, source_transaction_id, currency, org_id,
-        actor_id, actor_role, channel, narration, created_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10, NOW()))
+        actor_id, actor_role, channel, narration, reversal_of, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE($11, NOW()))
      RETURNING id, entry_no`,
     [
-      periodOf(postedAt || new Date()), type, transactionId, 'NGN', orgId,
+      period, type, transactionId, 'NGN', orgId,
       req?.user?.id ?? null, req?.user?.role ?? null,
       channel || (req?.user ? 'web' : 'system'),
-      reference ? `${type} ${reference}` : type, postedAt || null,
+      reference ? `${type} ${reference}` : type, reversalOf || null, postedAt || null,
     ]
   );
   const entryId = h.rows[0].id;
-  await client.query(
-    `INSERT INTO journal_lines (entry_id, account_id, debit, credit)
-     VALUES ($1,$2,$3,0), ($1,$4,0,$3)`,
-    [entryId, debitId, amt, creditId]
-  );
+  for (const l of legs) {
+    await client.query(
+      'INSERT INTO journal_lines (entry_id, account_id, debit, credit) VALUES ($1,$2,$3,$4)',
+      [entryId, l.accountId, l.dr, l.cr]
+    );
+  }
   return { ...h.rows[0], duplicate: false };
+}
+
+// Linked reversal of a posted entry (for corrections via maker-checker).
+// Flips every leg; original stays immutable.
+export async function reverseJournal(client, req, entryNo, reason) {
+  const head = await client.query('SELECT id, source_type, reversal_of FROM journal_entries WHERE entry_no = $1', [
+    entryNo,
+  ]);
+  if (!head.rows[0]) throw new Error('Original entry not found');
+  if (head.rows[0].reversal_of) throw new Error('Entry is itself a reversal');
+  const already = await client.query('SELECT id FROM journal_entries WHERE reversal_of = $1', [head.rows[0].id]);
+  if (already.rows[0]) throw new Error('Entry already reversed');
+  const orig = await client.query(
+    `SELECT l.account_id, a.code, l.debit, l.credit
+     FROM journal_lines l JOIN accounts a ON a.id = l.account_id
+     WHERE l.entry_id = $1`,
+    [head.rows[0].id]
+  );
+  return postJournal(client, req, {
+    type: `reversal:${head.rows[0].source_type}`,
+    reference: `${entryNo} (${reason || 'correction'})`,
+    reversalOf: head.rows[0].id,
+    lines: orig.rows.map((l) => ({ code: l.code, debit: Number(l.credit), credit: Number(l.debit) })),
+  });
 }
 
 // Trial balance: every account with total debits/credits. Must net to zero.

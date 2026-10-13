@@ -196,8 +196,32 @@ router.post(
           { amount: amt },
           { before: { status: loan.status, amount_paid: Number(loan.amount_paid) },
             after: { status: newStatus, amount_paid: newPaid } });
+        // Split the receipt across principal / interest / penalty pro-rata
+        // (exact in aggregate on full repayment; last leg absorbs rounding).
+        // Follow-up: schedule-level penalty allocation when L2 deepens.
+        const pBase = Number(loan.amount);
+        const iBase = Math.max(0, Number(loan.total_repayable) - pBase);
+        const fBase = Number(loan.penalty_accrued || 0);
+        const base = pBase + iBase + fBase;
+        let principal = base > 0 ? toMoney((amt * pBase) / base) : amt;
+        let interest = base > 0 ? toMoney((amt * iBase) / base) : 0;
+        let penalty = toMoney(amt - principal - interest);
+        if (penalty < 0) {
+          interest = toMoney(interest + penalty); // absorb sub-kobo rounding
+          penalty = 0;
+        }
+        if (interest < 0) {
+          principal = toMoney(principal + interest);
+          interest = 0;
+        }
         await postJournal(client, req, { type: 'loan_repayment', transactionId: tx.rows[0].id,
-          reference: tx.rows[0].reference, amount: amt, direction: 'out' });
+          reference: tx.rows[0].reference, amount: amt,
+          lines: [
+            { code: '1100', debit: amt, credit: 0 },
+            { code: '1200', debit: 0, credit: principal },
+            { code: '4001', debit: 0, credit: interest },
+            { code: '4002', debit: 0, credit: penalty },
+          ].filter((l) => l.debit > 0 || l.credit > 0) });
 
         return { transaction: tx.rows[0], amountPaid: newPaid, status: newStatus, balance: newBalance };
       });

@@ -502,3 +502,42 @@ ALTER TABLE public.journal_lines ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.accounts FROM anon, authenticated;
 REVOKE ALL ON TABLE public.journal_entries FROM anon, authenticated;
 REVOKE ALL ON TABLE public.journal_lines FROM anon, authenticated;
+
+-- L2: member balances are what the coop OWES: control is a liability.
+UPDATE accounts SET type = 'liability' WHERE code = '1100';
+
+INSERT INTO accounts (code, name, type, provider) VALUES
+  ('3002', 'Surplus Distribution – Dividends', 'equity', NULL),
+  ('5002', 'Interest Expense – Fixed Deposits', 'expense', NULL)
+ON CONFLICT (code) DO NOTHING;
+
+ALTER TABLE journal_entries ADD COLUMN IF NOT EXISTS reversal_of INTEGER REFERENCES journal_entries(id) ON DELETE RESTRICT;
+
+-- Maker-checker adjustments: officers/accountants propose, admins approve.
+-- Approval posts the lines atomically; rejection leaves books untouched.
+CREATE TABLE IF NOT EXISTS adjustments (
+  id SERIAL PRIMARY KEY,
+  lines JSONB NOT NULL,
+  reason TEXT NOT NULL,
+  period VARCHAR(7),
+  reversal_of INTEGER REFERENCES journal_entries(id) ON DELETE RESTRICT,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending',
+  proposed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  review_note TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  reviewed_at TIMESTAMPTZ
+);
+
+-- Locked accounting periods: postJournal refuses these (L2).
+CREATE TABLE IF NOT EXISTS close_periods (
+  period VARCHAR(7) PRIMARY KEY,
+  closed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  note TEXT,
+  closed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE public.adjustments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.close_periods ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.adjustments FROM anon, authenticated;
+REVOKE ALL ON TABLE public.close_periods FROM anon, authenticated;

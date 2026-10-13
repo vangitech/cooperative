@@ -324,14 +324,19 @@ router.patch('/loans/:id', requirePerm('loans.review'), async (req, res) => {
       await client.query('UPDATE wallets SET balance=$1, updated_at=NOW() WHERE user_id=$2', [
         newBalance, loan.user_id,
       ]);
-      await client.query(
+      const disbTx = await client.query(
         `INSERT INTO transactions (user_id, wallet_id, type, amount, balance_after, reference, description)
          VALUES ($1,$2,'loan_disbursement',$3,$4,$5,$6) RETURNING *`,
         [loan.user_id, w.rows[0].id, loan.amount, newBalance, generateRef('LND'), `Loan #${loan.id} disbursement`]
-      ).then(async (t) => {
-        await postJournal(client, req, { type: 'loan_disbursement', transactionId: t.rows[0].id,
-          reference: t.rows[0].reference, amount: Number(loan.amount), direction: 'in' });
-      });
+      );
+      // Disbursal creates the loan asset against the member's wallet claim.
+      // No float moves: this is internal credit creation, not a payout.
+      await postJournal(client, req, { type: 'loan_disbursement', transactionId: disbTx.rows[0].id,
+        reference: disbTx.rows[0].reference, amount: Number(loan.amount),
+        lines: [
+          { code: '1200', debit: Number(loan.amount), credit: 0 },
+          { code: '1100', debit: 0, credit: Number(loan.amount) },
+        ] });
       const r = await client.query(
         `UPDATE loans SET status='disbursed', reviewed_by=$1, reviewed_at=NOW(), review_note=$2
          WHERE id=$3 RETURNING *`,
@@ -378,6 +383,12 @@ router.post('/dividends', requirePerm('dividends.manage'), async (req, res) => {
           `INSERT INTO dividends (user_id, amount, period) VALUES ($1,$2,$3) RETURNING *`,
           [userId, toMoney(amount), period]
         );
+        await postJournal(client, req, { type: 'dividend_declared',
+          reference: `${period} → user #${userId}`, amount: Number(r.rows[0].amount),
+          lines: [
+            { code: '3002', debit: Number(r.rows[0].amount), credit: 0 },
+            { code: '2002', debit: 0, credit: Number(r.rows[0].amount) },
+          ] });
         await auditTx(client, req, 'dividend.declared', 'dividend', r.rows[0].id,
           { period, amount: Number(r.rows[0].amount), member: userId });
         return [r.rows[0]];
@@ -396,6 +407,13 @@ router.post('/dividends', requirePerm('dividends.manage'), async (req, res) => {
         );
         out.push(r.rows[0]);
       }
+      // One distribution entry for the whole declaration (payable up).
+      await postJournal(client, req, { type: 'dividend_declared',
+        reference: `${period} × ${out.length} members`, amount: toMoney(per * out.length),
+        lines: [
+          { code: '3002', debit: toMoney(per * out.length), credit: 0 },
+          { code: '2002', debit: 0, credit: toMoney(per * out.length) },
+        ] });
       await auditTx(client, req, 'dividend.declared', 'dividend', null,
         { period, count: out.length, perMember: per });
       return out;
@@ -443,7 +461,11 @@ router.patch('/dividends/:id/pay', requirePerm('dividends.manage'), async (req, 
         { before: { status: 'pending', balance: Number(w.rows[0].balance) },
           after: { status: 'paid', balance: newBalance } });
       await postJournal(client, req, { type: 'dividend', transactionId: tx.rows[0].id,
-        reference: tx.rows[0].reference, amount: Number(div.amount), direction: 'in' });
+        reference: tx.rows[0].reference, amount: Number(div.amount),
+        lines: [
+          { code: '2002', debit: Number(div.amount), credit: 0 },
+          { code: '1100', debit: 0, credit: Number(div.amount) },
+        ] });
       return r.rows[0];
     });
     notify(result.user_id, {

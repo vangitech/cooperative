@@ -67,7 +67,11 @@ router.post(
           { amount: amt },
           { before: { balance: Number(w.rows[0].balance) }, after: { balance: newBalance } });
         await postJournal(client, req, { type: 'fixed_deposit', transactionId: tx.rows[0].id,
-          reference: tx.rows[0].reference, amount: amt, direction: 'out' });
+          reference: tx.rows[0].reference, amount: amt,
+          lines: [
+            { code: '1100', debit: amt, credit: 0 },
+            { code: '2003', debit: 0, credit: amt },
+          ] });
         return { fixed: fd.rows[0], transaction: tx.rows[0], balance: newBalance };
       });
 
@@ -123,7 +127,12 @@ router.post(
           { before: { status: 'active', balance: Number(w.rows[0].balance) },
             after: { status: 'matured', balance: newBalance } });
         await postJournal(client, req, { type: 'fixed_maturity', transactionId: tx.rows[0].id,
-          reference: tx.rows[0].reference, amount: payout, direction: 'in' });
+          reference: tx.rows[0].reference, amount: payout,
+          lines: [
+            { code: '2003', debit: Number(fd.amount), credit: 0 },
+            { code: '5002', debit: toMoney(payout - Number(fd.amount)), credit: 0 },
+            { code: '1100', debit: 0, credit: payout },
+          ].filter((l) => l.debit > 0 || l.credit > 0) });
         return { transaction: tx.rows[0], payout, balance: newBalance };
       });
       res.json(result);
@@ -164,7 +173,11 @@ router.post(
           { before: { status: 'active', balance: Number(w.rows[0].balance) },
             after: { status: 'broken', balance: newBalance } });
         await postJournal(client, req, { type: 'fixed_break', transactionId: tx.rows[0].id,
-          reference: tx.rows[0].reference, amount: amt, direction: 'in' });
+          reference: tx.rows[0].reference, amount: amt,
+          lines: [
+            { code: '2003', debit: amt, credit: 0 },
+            { code: '1100', debit: 0, credit: amt },
+          ] });
         return { transaction: tx.rows[0], refunded: amt, balance: newBalance };
       });
       res.json(result);

@@ -50,8 +50,13 @@ export async function executePlan(client, plan) {
     { amount: amt },
     { before: { balance: Number(w.rows[0].balance) }, after: { balance: newBalance },
       channel: SYSTEM_CHANNEL });
+  // Encumbrance, not a payout: spendable claim down, savings payable up.
   await postJournal(client, systemReq, { type: 'savings', transactionId: tx.rows[0].id,
-    reference: tx.rows[0].reference, amount: amt, direction: 'out', channel: SYSTEM_CHANNEL });
+    reference: tx.rows[0].reference, amount: amt,
+    lines: [
+      { code: '1100', debit: amt, credit: 0 },
+      { code: '2001', debit: 0, credit: amt },
+    ], channel: SYSTEM_CHANNEL });
   return 'paid';
 }
 

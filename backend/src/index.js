@@ -19,6 +19,7 @@ import announcementRoutes from './routes/announcements.js';
 import planRoutes from './routes/plans.js';
 import reportsRoutes from './routes/reports.js';
 import orgsRoutes from './routes/orgs.js';
+import ledgerRoutes from './routes/ledger.js';
 
 for (const key of ['DATABASE_URL', 'JWT_SECRET']) {
   if (!process.env[key]) {
@@ -51,6 +52,7 @@ app.use('/api/announcements', announcementRoutes);
 app.use('/api/plans', planRoutes);
 app.use('/api/admin/reports', reportsRoutes);
 app.use('/api/orgs', orgsRoutes);
+app.use('/api/admin/ledger', ledgerRoutes);
 
 // 404
 app.use((req, res) => res.status(404).json({ message: 'Route not found' }));
