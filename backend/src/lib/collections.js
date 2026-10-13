@@ -1,4 +1,5 @@
 import { toMoney, generateRef } from '../utils/helpers.js';
+import { auditTx, systemReq, SYSTEM_CHANNEL } from './audit.js';
 
 // Outstanding across financed total + accrued late penalties.
 export const collectionOutstanding = (c) =>
@@ -127,6 +128,11 @@ export async function settleDueCollections(withTransaction, userId) {
         await client.query('UPDATE collections SET amount_paid = $1, status = $2 WHERE id = $3', [
           newPaid, left <= 0 ? 'completed' : 'collected', c.id,
         ]);
+        await auditTx(client, systemReq, 'store.auto_debited', 'collection', c.id,
+          { amount: pay },
+          { before: { amount_paid: Number(c.amount_paid), balance },
+            after: { amount_paid: newPaid, balance: newBalance },
+            channel: SYSTEM_CHANNEL });
       }
     });
   } catch (e) {

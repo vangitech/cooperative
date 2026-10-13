@@ -2,7 +2,7 @@ import express from 'express';
 import { query, withTransaction } from '../db.js';
 import { authenticate } from '../middleware/auth.js';
 import { generateRef, isPositiveNumber, toMoney, asyncHandler } from '../utils/helpers.js';
-import { audit } from '../lib/audit.js';
+import { audit, auditTx } from '../lib/audit.js';
 import {
   ensureSchedules,
   assessPenalties,
@@ -191,10 +191,14 @@ router.post(
           [loan.id, req.user.id, amt, tx.rows[0].id]
         );
 
+        await auditTx(client, req, 'loan.repaid', 'loan', loan.id,
+          { amount: amt },
+          { before: { status: loan.status, amount_paid: Number(loan.amount_paid) },
+            after: { status: newStatus, amount_paid: newPaid } });
+
         return { transaction: tx.rows[0], amountPaid: newPaid, status: newStatus, balance: newBalance };
       });
 
-      audit(req, 'loan.repaid', 'loan', req.params.id, { amount: amt });
       res.json(result);
     } catch (e) {
       res.status(400).json({ message: e.message });

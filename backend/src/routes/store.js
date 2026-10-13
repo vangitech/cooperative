@@ -2,7 +2,7 @@ import express from 'express';
 import { query, withTransaction } from '../db.js';
 import { authenticate, requirePerm } from '../middleware/auth.js';
 import { generateRef, isPositiveNumber, toMoney, asyncHandler } from '../utils/helpers.js';
-import { audit } from '../lib/audit.js';
+import { audit, auditTx } from '../lib/audit.js';
 import { notify } from '../lib/notify.js';
 import {
   ensureCollectionSchedules,
@@ -159,12 +159,16 @@ router.post(
         await allocateCollectionPayment(client, c.id, amt);
         const newPaid = toMoney(Number(c.amount_paid) + amt);
         const left = toMoney(Number(c.total_repayable) + Number(c.penalty_accrued || 0) - newPaid);
+        const newStatus = left <= 0 ? 'completed' : 'collected';
         await client.query('UPDATE collections SET amount_paid = $1, status = $2 WHERE id = $3', [
-          newPaid, left <= 0 ? 'completed' : 'collected', c.id,
+          newPaid, newStatus, c.id,
         ]);
+        await auditTx(client, req, 'store.repaid', 'collection', c.id,
+          { amount: amt },
+          { before: { status: c.status, amount_paid: Number(c.amount_paid), balance: Number(w.rows[0].balance) },
+            after: { status: newStatus, amount_paid: newPaid, balance: newBalance } });
         return { transaction: tx.rows[0], amountPaid: newPaid, balance: newBalance };
       });
-      audit(req, 'store.repaid', 'collection', req.params.id, { amount: amt });
       res.json(result);
     } catch (e) {
       res.status(400).json({ message: e.message });
@@ -237,6 +241,9 @@ router.patch(
              WHERE id = $3 RETURNING *`,
             [req.user.id, note || null, c.id]
           );
+          await auditTx(client, req, 'store.rejected', 'collection', c.id,
+            { amount: Number(c.total_repayable) },
+            { before: { status: 'pending' }, after: { status: 'rejected' } });
           return r.rows[0];
         }
 
@@ -267,11 +274,14 @@ router.patch(
            WHERE id = $3 RETURNING *`,
           [req.user.id, note || null, c.id]
         );
+        await auditTx(client, req, 'store.approved', 'collection', c.id,
+          { amount: Number(r.rows[0].total_repayable) },
+          { before: { status: 'pending', balance: Number(w.rows[0].balance) },
+            after: { status: 'collected', balance: newBalance } });
         await ensureCollectionSchedules(client, r.rows[0]);
         return r.rows[0];
       });
 
-      audit(req, `store.${status}`, 'collection', result.id, { amount: Number(result.total_repayable) });
       notify(result.user_id, status === 'approved'
         ? { title: 'Collection approved', body: 'Your item is ready for pickup. The down payment was deducted.', link: '/market' }
         : { title: 'Collection request update', body: 'Your request was not approved. Contact support for details.', link: '/market' });
@@ -307,7 +317,7 @@ router.post(
       [name, category, description || null, toMoney(price), Number(stock) || 0,
        minDownPct ?? 20, maxMonths ?? 6, markupPct ?? 5]
     );
-    audit(req, 'store.product_created', 'store_product', rows[0].id, { name });
+    audit(req, 'store.product_created', 'store_product', rows[0].id, { name }, { after: rows[0] });
     res.status(201).json(rows[0]);
   })
 );
@@ -329,13 +339,16 @@ router.patch(
       }
     }
     if (!sets.length) return res.status(400).json({ message: 'Nothing to update' });
+    const before = await query('SELECT * FROM store_products WHERE id = $1', [req.params.id]);
+    if (!before.rows[0]) return res.status(404).json({ message: 'Product not found' });
     params.push(req.params.id);
     const { rows } = await query(
       `UPDATE store_products SET ${sets.join(', ')} WHERE id = $${params.length} RETURNING *`,
       params
     );
     if (!rows[0]) return res.status(404).json({ message: 'Product not found' });
-    audit(req, 'store.product_updated', 'store_product', rows[0].id, { name: rows[0].name });
+    audit(req, 'store.product_updated', 'store_product', rows[0].id,
+      { name: rows[0].name }, { before: before.rows[0], after: rows[0] });
     res.json(rows[0]);
   })
 );

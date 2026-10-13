@@ -1,5 +1,6 @@
 import { query, withTransaction } from '../db.js';
 import { toMoney, generateRef } from '../utils/helpers.js';
+import { auditTx, systemReq, SYSTEM_CHANNEL } from './audit.js';
 
 // Next occurrence of a day-of-month (clamped to month length implicitly
 // by rolling to the 1st when the day already passed this month).
@@ -44,6 +45,10 @@ export async function executePlan(client, plan) {
     `UPDATE savings_plans SET last_run = NOW(), next_run = $1 WHERE id = $2`,
     [next.toISOString().slice(0, 10), plan.id]
   );
+  await auditTx(client, systemReq, 'savings.plan_run', 'savings_plan', plan.id,
+    { amount: amt },
+    { before: { balance: Number(w.rows[0].balance) }, after: { balance: newBalance },
+      channel: SYSTEM_CHANNEL });
   return 'paid';
 }
 

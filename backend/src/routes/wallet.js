@@ -2,7 +2,7 @@ import express from 'express';
 import { query, withTransaction } from '../db.js';
 import { authenticate } from '../middleware/auth.js';
 import { generateRef, isPositiveNumber, toMoney, asyncHandler, sendCsv } from '../utils/helpers.js';
-import { audit } from '../lib/audit.js';
+import { audit, auditTx } from '../lib/audit.js';
 import { notify } from '../lib/notify.js';
 import { settleDueCollections } from '../lib/collections.js';
 import { runDuePlans } from '../lib/plans.js';
@@ -84,6 +84,7 @@ router.get('/statement.csv', asyncHandler(async (req, res) => {
      FROM transactions WHERE user_id = $1 ${range} ORDER BY created_at`,
     params
   );
+  audit(req, 'export.downloaded', 'export', null, { file: 'statement.csv', rows: rows.length, from: from || null, to: to || null });
   sendCsv(
     res,
     `mpcs-statement-${new Date().toISOString().slice(0, 10)}.csv`,
@@ -111,6 +112,9 @@ router.post('/deposit', async (req, res) => {
          VALUES ($1,$2,'deposit',$3,$4,$5,$6) RETURNING *`,
         [req.user.id, w.rows[0].id, amt, newBalance, generateRef('DEP'), description || 'Wallet deposit']
       );
+      await auditTx(client, req, 'wallet.deposited', 'user', req.user.id,
+        { amount: amt, reference: tx.rows[0].reference },
+        { before: { balance: Number(w.rows[0].balance) }, after: { balance: newBalance } });
       return { wallet: { ...w.rows[0], balance: newBalance }, transaction: tx.rows[0] };
     });
 
@@ -141,6 +145,9 @@ router.post('/withdraw', async (req, res) => {
          VALUES ($1,$2,'withdrawal',$3,$4,$5,$6) RETURNING *`,
         [req.user.id, w.rows[0].id, amt, newBalance, generateRef('WDR'), description || 'Wallet withdrawal']
       );
+      await auditTx(client, req, 'wallet.withdrawn', 'user', req.user.id,
+        { amount: amt, reference: tx.rows[0].reference },
+        { before: { balance: Number(w.rows[0].balance) }, after: { balance: newBalance } });
       return { wallet: { ...w.rows[0], balance: newBalance }, transaction: tx.rows[0] };
     });
 
@@ -234,13 +241,16 @@ router.post('/transfer', asyncHandler(async (req, res) => {
       `INSERT INTO notifications (user_id, title, body, link) VALUES ($1,$2,$3,$4)`,
       [target.id, 'Money received', `${req.user.first_name} ${req.user.last_name} sent you ${amt} NGN.`, '/wallet']
     );
+    await auditTx(client, req, 'wallet.transfer_sent', 'user', req.user.id,
+      { reference: ref, amount: amt, to: target.email },
+      { before: { from_balance: Number(from.rows[0].balance), to_balance: Number(to.rows[0].balance) },
+        after: { from_balance: fromBalance, to_balance: toBalance } });
     return { reference: ref, recipientId: target.id, recipient: `${target.first_name} ${target.last_name}`, amount: amt, balance: fromBalance };
   });
   } catch (e) {
     return res.status(400).json({ message: e.message });
   }
 
-  audit(req, 'wallet.transfer_sent', 'user', req.user.id, { reference: result.reference, amount: amt });
   await settleDueCollections(withTransaction, result.recipientId);
   await runDuePlans();
   res.status(201).json(result);

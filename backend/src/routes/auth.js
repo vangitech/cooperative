@@ -56,7 +56,7 @@ router.post('/register', authLimiter, async (req, res) => {
     }
 
     res.status(201).json({ token: signToken(user), user, virtualAccount });
-    audit(req, 'auth.register', 'user', user.id, { email: user.email }, user.id);
+    audit(req, 'auth.register', 'user', user.id, { email: user.email }, { actorId: user.id, actorRole: user.role });
   } catch (e) {
     console.error(e);
     res.status(500).json({ message: 'Server error' });
@@ -70,17 +70,28 @@ router.post('/login', authLimiter, async (req, res) => {
 
     const { rows } = await query('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
     const user = rows[0];
-    if (!user) return res.status(401).json({ message: 'Invalid credentials' });
-    if (user.status === 'pending')
+    if (!user) {
+      audit(req, 'auth.login_failed', 'user', null, { email: email.toLowerCase(), reason: 'unknown email' }, { outcome: 'failure' });
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+    if (user.status === 'pending') {
+      audit(req, 'auth.login_failed', 'user', user.id, { email: user.email, reason: 'pending approval' }, { actorRole: user.role, outcome: 'failure' });
       return res.status(403).json({ message: 'Account pending approval. An admin will review your application.' });
-    if (user.status !== 'active') return res.status(403).json({ message: 'Account suspended' });
+    }
+    if (user.status !== 'active') {
+      audit(req, 'auth.login_failed', 'user', user.id, { email: user.email, reason: `status ${user.status}` }, { actorRole: user.role, outcome: 'failure' });
+      return res.status(403).json({ message: 'Account suspended' });
+    }
 
     const ok = await bcrypt.compare(password, user.password_hash);
-    if (!ok) return res.status(401).json({ message: 'Invalid credentials' });
+    if (!ok) {
+      audit(req, 'auth.login_failed', 'user', user.id, { email: user.email, reason: 'wrong password' }, { actorRole: user.role, outcome: 'failure' });
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
 
     delete user.password_hash;
     res.json({ token: signToken(user), user });
-    audit(req, 'auth.login', 'user', user.id, {}, user.id);
+    audit(req, 'auth.login', 'user', user.id, {}, { actorId: user.id, actorRole: user.role });
   } catch (e) {
     console.error(e);
     res.status(500).json({ message: 'Server error' });
@@ -139,7 +150,7 @@ router.post(
       res.json({ message: 'If an account exists for that email, a reset link has been sent.' });
 
     if (!email) return done();
-    const { rows } = await query('SELECT id, first_name, email FROM users WHERE email = $1', [
+    const { rows } = await query('SELECT id, first_name, email, role FROM users WHERE email = $1', [
       email.toLowerCase(),
     ]);
     if (!rows[0]) return done();
@@ -161,7 +172,7 @@ router.post(
         <p>If you didn't request this, ignore this email — your password stays unchanged.</p>`,
     }).catch((e) => console.error('reset mail failed:', e.message));
 
-    audit(req, 'auth.password_reset_requested', 'user', rows[0].id, {}, rows[0].id);
+    audit(req, 'auth.password_reset_requested', 'user', rows[0].id, {}, { actorId: rows[0].id, actorRole: rows[0].role });
     done();
   })
 );

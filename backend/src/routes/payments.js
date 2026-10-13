@@ -11,7 +11,7 @@ import {
   listBanks,
   resolveAccount,
 } from '../lib/flutterwave.js';
-import { audit } from '../lib/audit.js';
+import { audit, auditTx } from '../lib/audit.js';
 import { notify } from '../lib/notify.js';
 import { settleDueCollections } from '../lib/collections.js';
 import { runDuePlans } from '../lib/plans.js';
@@ -26,7 +26,8 @@ const callbackUrl = () => process.env.FUND_CALLBACK_URL || 'http://localhost:517
 // Credit a verified funding intent exactly once (idempotent).
 // Must be called inside withTransaction; locks the intent row first.
 // flw = verification data ({ id, flw_ref }) used for idempotency + records.
-async function creditFundIntent(client, intentId, flw) {
+// req = request (or webhook stub) for the transactional audit entry.
+async function creditFundIntent(client, intentId, flw, req, channel = 'web') {
   const locked = await client.query('SELECT * FROM payment_intents WHERE id = $1 FOR UPDATE', [intentId]);
   const intent = locked.rows[0];
   if (!intent) throw new Error('Payment intent not found');
@@ -62,12 +63,15 @@ async function creditFundIntent(client, intentId, flw) {
   if (flw?.id) {
     await client.query(`UPDATE payment_intents SET flw_id = $1 WHERE id = $2`, [String(flw.id), intent.id]);
   }
+  await auditTx(client, req, 'wallet.funded_online', 'payment_intent', intent.id,
+    { txRef: intent.tx_ref, amount: amt },
+    { before: { balance: Number(w.rows[0].balance) }, after: { balance: newBalance }, channel });
   return { already: false, transaction: tx.rows[0], balance: newBalance };
 }
 
 // Credit a bank transfer received on a member's virtual funding account.
 // Idempotent via the Flutterwave transaction id.
-async function creditVirtualAccount(client, userId, flw, accountNumber) {
+async function creditVirtualAccount(client, userId, flw, accountNumber, req, channel = 'web') {
   const flwId = String(flw.id);
   const dup = await client.query('SELECT id FROM transactions WHERE flw_id = $1', [flwId]);
   if (dup.rows[0]) return { already: true };
@@ -90,11 +94,15 @@ async function creditVirtualAccount(client, userId, flw, accountNumber) {
     `INSERT INTO notifications (user_id, title, body, link) VALUES ($1,$2,$3,$4)`,
     [userId, 'Wallet funded', `${amt} NGN received via bank transfer`, '/wallet']
   );
+  await auditTx(client, req, 'wallet.funded_account', 'virtual_account', accountNumber,
+    { amount: amt },
+    { before: { balance: Number(w.rows[0].balance) }, after: { balance: newBalance }, channel });
   return { already: false, transaction: tx.rows[0], balance: newBalance };
 }
 
 // Refund a pending withdrawal intent (transfer failed at Flutterwave).
-async function refundWithdrawIntent(client, intentId, reason) {
+// Runs inside its own transaction; the failure entry commits with the refund.
+async function refundWithdrawIntent(client, intentId, reason, req, channel = 'web') {
   const locked = await client.query('SELECT * FROM payment_intents WHERE id = $1 FOR UPDATE', [intentId]);
   const intent = locked.rows[0];
   if (!intent) throw new Error('Payment intent not found');
@@ -116,6 +124,10 @@ async function refundWithdrawIntent(client, intentId, reason) {
     `UPDATE payment_intents SET status = 'failed', updated_at = NOW() WHERE id = $1 RETURNING *`,
     [intent.id]
   );
+  await auditTx(client, req, 'wallet.withdraw_failed', 'payment_intent', intent.id,
+    { amount: amt, reason: reason || null },
+    { before: { balance: Number(w.rows[0].balance) }, after: { balance: newBalance },
+      outcome: 'failure', channel });
   return r.rows[0];
 }
 
@@ -193,15 +205,14 @@ router.get(
     }
 
     if (!flwOk(verification.data, intent)) {
+      audit(req, 'wallet.fund_failed', 'payment_intent', intent.id,
+        { txRef, status: verification.data?.status || 'unknown' }, { outcome: 'failure' });
       return res.json({ verified: false, status: verification.data?.status || 'unknown' });
     }
 
     const result = await withTransaction((client) =>
-      creditFundIntent(client, intent.id, verification.data)
+      creditFundIntent(client, intent.id, verification.data, req)
     );
-    audit(req, 'wallet.funded_online', 'payment_intent', intent.id, {
-      txRef, amount: Number(intent.amount),
-    });
     await settleDueCollections(withTransaction, intent.user_id);
     await runDuePlans();
     res.json({ verified: true, ...result });
@@ -280,6 +291,9 @@ router.post(
            VALUES ($1,$2,'withdraw',$3,$4,$5,$6) RETURNING *`,
           [req.user.id, w.rows[0].id, txRef, amt, CURRENCY, JSON.stringify({ accountNumber, bankCode, accountName: accountName || null })]
         );
+        await auditTx(client, req, 'wallet.withdraw_bank', 'payment_intent', r.rows[0].id,
+          { reference: txRef, amount: amt, accountNumber },
+          { before: { balance: Number(w.rows[0].balance) }, after: { balance: newBalance } });
         return r.rows[0];
       });
     } catch (e) {
@@ -297,7 +311,8 @@ router.post(
         narration: `MPCS withdrawal ${txRef}`,
       });
     } catch (e) {
-      await withTransaction((client) => refundWithdrawIntent(client, intent.id, `Transfer failed: ${e.message}`));
+      // Refund runs in its own transaction and logs wallet.withdraw_failed atomically.
+      await withTransaction((client) => refundWithdrawIntent(client, intent.id, `Transfer failed: ${e.message}`, req));
       return res.status(502).json({ message: `Transfer failed and amount was refunded: ${e.message}` });
     }
 
@@ -307,9 +322,6 @@ router.post(
       intent.id,
     ]);
 
-    audit(req, 'wallet.withdraw_bank', 'payment_intent', intent.id, {
-      reference: txRef, amount: amt,
-    });
     notify(req.user.id, {
       title: 'Withdrawal submitted',
       body: `${amt} NGN payout to ${accountNumber} is being processed.`,
@@ -370,7 +382,7 @@ router.get(
     }
     if (flwStatus === 'FAILED') {
       await withTransaction((client) =>
-        refundWithdrawIntent(client, intent.id, `Transfer failed: ${transfer.data?.complete_message || ''}`)
+        refundWithdrawIntent(client, intent.id, `Transfer failed: ${transfer.data?.complete_message || ''}`, req)
       );
       return res.json({ status: 'failed', refunded: true });
     }
@@ -385,8 +397,11 @@ router.post(
   asyncHandler(async (req, res) => {
     const configured = process.env.FLW_WEBHOOK_HASH;
     if (configured) {
-      if (req.headers['verif-hash'] !== configured)
+      if (req.headers['verif-hash'] !== configured) {
+        audit({ ip: req.ip, headers: req.headers }, 'wallet.webhook_rejected', 'payment_intent', null,
+          { reason: 'bad signature' }, { outcome: 'failure', channel: 'webhook' });
         return res.status(401).json({ message: 'Invalid webhook signature' });
+      }
     } else {
       console.warn('⚠️  FLW_WEBHOOK_HASH not set — accepting unsigned webhook (dev only)');
     }
@@ -407,12 +422,8 @@ router.post(
           const verification = await verifyTransactionById(data.id);
           if (flwOk(verification.data, intent)) {
             await withTransaction((client) =>
-              creditFundIntent(client, intent.id, verification.data)
-            );
-            audit(
-              { user: { id: intent.user_id }, ip: req.ip },
-              'wallet.funded_online', 'payment_intent', intent.id,
-              { txRef: intent.tx_ref, via: 'webhook' }
+              creditFundIntent(client, intent.id, verification.data,
+                { user: { id: intent.user_id }, ip: req.ip, headers: {} }, 'webhook')
             );
           }
         } else {
@@ -432,14 +443,10 @@ router.post(
               Number(v.amount) > 0
             ) {
               const result = await withTransaction((client) =>
-                creditVirtualAccount(client, account.user_id, v, account.account_number)
+                creditVirtualAccount(client, account.user_id, v, account.account_number,
+                  { user: { id: account.user_id }, ip: req.ip, headers: {} }, 'webhook')
               );
               if (!result.already) {
-                audit(
-                  { user: { id: account.user_id }, ip: req.ip },
-                  'wallet.funded_account', 'virtual_account', account.id,
-                  { amount: Number(v.amount), via: 'webhook' }
-                );
                 await settleDueCollections(withTransaction, account.user_id);
                 await runDuePlans();
               }
@@ -459,7 +466,8 @@ router.post(
             ]);
           } else {
             await withTransaction((client) =>
-              refundWithdrawIntent(client, intent.id, `Transfer ${data.status || 'failed'}: ${data.complete_message || ''}`)
+              refundWithdrawIntent(client, intent.id, `Transfer ${data.status || 'failed'}: ${data.complete_message || ''}`,
+                { user: { id: intent.user_id }, ip: req.ip, headers: {} }, 'webhook')
             );
           }
         }

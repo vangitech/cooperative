@@ -2,7 +2,7 @@ import express from 'express';
 import { query, withTransaction } from '../db.js';
 import { authenticate } from '../middleware/auth.js';
 import { generateRef, isPositiveNumber, toMoney, asyncHandler } from '../utils/helpers.js';
-import { audit } from '../lib/audit.js';
+import { audit, auditTx } from '../lib/audit.js';
 
 const router = express.Router();
 router.use(authenticate);
@@ -62,10 +62,12 @@ router.post(
            VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
           [req.user.id, amt, tenure, annual, payout, maturesAt.toISOString(), tx.rows[0].id]
         );
+        await auditTx(client, req, 'fixed.locked', 'fixed_deposit', fd.rows[0].id,
+          { amount: amt },
+          { before: { balance: Number(w.rows[0].balance) }, after: { balance: newBalance } });
         return { fixed: fd.rows[0], transaction: tx.rows[0], balance: newBalance };
       });
 
-      audit(req, 'fixed.locked', 'fixed_deposit', result.fixed.id, { amount: amt });
       res.status(201).json(result);
     } catch (e) {
       res.status(400).json({ message: e.message });
@@ -113,9 +115,12 @@ router.post(
           [req.user.id, w.rows[0].id, payout, newBalance, generateRef('FXM'), `Fixed deposit #${fd.id} matured`]
         );
         await client.query(`UPDATE fixed_deposits SET status = 'matured' WHERE id = $1`, [fd.id]);
+        await auditTx(client, req, 'fixed.matured', 'fixed_deposit', fd.id,
+          { payout },
+          { before: { status: 'active', balance: Number(w.rows[0].balance) },
+            after: { status: 'matured', balance: newBalance } });
         return { transaction: tx.rows[0], payout, balance: newBalance };
       });
-      audit(req, 'fixed.matured', 'fixed_deposit', req.params.id, { payout: result.payout });
       res.json(result);
     } catch (e) {
       res.status(400).json({ message: e.message });
@@ -149,9 +154,12 @@ router.post(
           [req.user.id, w.rows[0].id, amt, newBalance, generateRef('FXB'), `Fixed deposit #${fd.id} broken early (interest forfeited)`]
         );
         await client.query(`UPDATE fixed_deposits SET status = 'broken' WHERE id = $1`, [fd.id]);
+        await auditTx(client, req, 'fixed.broken', 'fixed_deposit', fd.id,
+          { refunded: amt },
+          { before: { status: 'active', balance: Number(w.rows[0].balance) },
+            after: { status: 'broken', balance: newBalance } });
         return { transaction: tx.rows[0], refunded: amt, balance: newBalance };
       });
-      audit(req, 'fixed.broken', 'fixed_deposit', req.params.id, { refunded: result.refunded });
       res.json(result);
     } catch (e) {
       res.status(400).json({ message: e.message });

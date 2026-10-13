@@ -1,3 +1,35 @@
+# Audit Trail Upgrade — Update v1
+
+Goal: make the cooperative's audit trail immutable, tamper-evident and
+regulator-exportable.
+
+## Priority 1 — Append-only hardening + richer columns
+- `REVOKE UPDATE, DELETE ON audit_logs` from every human-held role (inserts only, by the app).
+- Add columns: `actor_role` (role at time of action), `before` + `after`
+  (JSONB state snapshots for money fields), `user_agent`, `channel`, `outcome`
+  (success / failure).
+- Acceptance: old rows cannot be edited; every new entry carries role + outcome.
+
+## Priority 2 — Money-event audits inside the DB transaction
+- Move audit writes for wallet/loan/dividend/fund flows into the same
+  transaction as the money movement (guaranteed, never silently dropped).
+- Keep fire-and-forget only for low-stakes events.
+- Acceptance: crash/load test loses zero money-event entries.
+
+## Priority 3 — Failure + config-change logging
+- Log failed logins, permission denials, rejected payments.
+- Log loan-product / rate / fee config changes (currently invisible).
+- Log bulk export downloads (who pulled the member list / ledgers).
+- Acceptance: red-team walkthrough shows attacker + treasurer traces.
+
+## Priority 4 — Hash-chain tamper evidence
+- Each row stores `row_hash = sha256(prev_hash + payload)`; verify endpoint/job.
+- Acceptance: editing any historical row breaks the chain detectably.
+
+---
+
+# Appendix — Original Product Feedback (preserved)
+
 # MPCS Project Feedback — Update v1
 
 Product-level analysis of the multi-purpose cooperative society app

@@ -2,6 +2,7 @@ import express from 'express';
 import { query, withTransaction } from '../db.js';
 import { authenticate } from '../middleware/auth.js';
 import { generateRef, isPositiveNumber, toMoney, asyncHandler } from '../utils/helpers.js';
+import { auditTx } from '../lib/audit.js';
 
 const router = express.Router();
 router.use(authenticate);
@@ -34,6 +35,10 @@ router.post('/', async (req, res) => {
          VALUES ($1,$2,$3,$4,$5) RETURNING *`,
         [req.user.id, amt, savingsType, note || null, tx.rows[0].id]
       );
+
+      await auditTx(client, req, 'savings.deposited', 'savings', s.rows[0].id,
+        { amount: amt, savingsType },
+        { before: { balance: Number(w.rows[0].balance) }, after: { balance: newBalance } });
 
       return { savings: s.rows[0], transaction: tx.rows[0], balance: newBalance };
     });

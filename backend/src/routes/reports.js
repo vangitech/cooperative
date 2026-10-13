@@ -209,15 +209,16 @@ async function buildReport(type, from, to) {
 
     case 'audit-trail': {
       const { rows } = await query(
-        `SELECT a.created_at AS time, u.email AS actor, a.action, a.entity, a.entity_id, a.ip
+        `SELECT a.created_at AS time, u.email AS actor, a.actor_role AS role,
+                a.action, a.outcome, a.entity, a.entity_id, a.ip
          FROM audit_logs a LEFT JOIN users u ON u.id = a.actor_id
          WHERE a.created_at >= $1 AND a.created_at < $2
          ORDER BY a.created_at`,
         [from, to]
       );
       return {
-        columns: ['Time', 'Actor', 'Action', 'Entity', 'Entity ID', 'IP'],
-        rows: rows.map((a) => [a.time, a.actor, a.action, a.entity, a.entity_id, a.ip]),
+        columns: ['Time', 'Actor', 'Role', 'Action', 'Outcome', 'Entity', 'Entity ID', 'IP'],
+        rows: rows.map((a) => [a.time, a.actor, a.role, a.action, a.outcome, a.entity, a.entity_id, a.ip]),
         summary: { entries: rows.length },
       };
     }

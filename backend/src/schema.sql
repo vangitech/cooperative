@@ -353,3 +353,17 @@ BEGIN
   END LOOP;
   REVOKE USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public FROM anon, authenticated;
 END $$;
+
+-- Priority 1 (update v1.md): audit trail goes append-only with richer context.
+-- `before_state`/`after_state` (not before/after — reserved words) hold JSONB
+-- snapshots for money fields; `outcome` distinguishes success vs failure.
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS actor_role VARCHAR(20);
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS before_state JSONB;
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS after_state JSONB;
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS user_agent VARCHAR(255);
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS channel VARCHAR(20) NOT NULL DEFAULT 'web';
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS outcome VARCHAR(20) NOT NULL DEFAULT 'success';
+CREATE INDEX IF NOT EXISTS idx_audit_outcome ON audit_logs(outcome);
+-- Belt-and-braces (RLS + REVOKE ALL above already deny these): the audit log
+-- must be insert-only for every human-held role, even if grants change later.
+REVOKE UPDATE, DELETE, TRUNCATE ON audit_logs FROM anon, authenticated;

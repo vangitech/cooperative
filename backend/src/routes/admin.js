@@ -2,7 +2,7 @@ import express from 'express';
 import { query, withTransaction } from '../db.js';
 import { authenticate, requirePerm } from '../middleware/auth.js';
 import { generateRef, toMoney, isPositiveNumber, asyncHandler, sendCsv } from '../utils/helpers.js';
-import { audit } from '../lib/audit.js';
+import { audit, auditTx } from '../lib/audit.js';
 import { ensureSchedules } from '../lib/loans.js';
 import { notify } from '../lib/notify.js';
 import { settleDueCollections } from '../lib/collections.js';
@@ -142,6 +142,9 @@ router.patch('/loans/:id', requirePerm('loans.review'), async (req, res) => {
            WHERE id=$3 RETURNING *`,
           [req.user.id, note || null, loan.id]
         );
+        await auditTx(client, req, 'loan.rejected', 'loan', loan.id,
+          { amount: Number(loan.amount) },
+          { before: { status: 'pending' }, after: { status: 'rejected' } });
         return r.rows[0];
       }
 
@@ -162,10 +165,13 @@ router.patch('/loans/:id', requirePerm('loans.review'), async (req, res) => {
         [req.user.id, note || null, loan.id]
       );
       await ensureSchedules(client, r.rows[0]);
+      await auditTx(client, req, 'loan.approved', 'loan', loan.id,
+        { amount: Number(loan.amount) },
+        { before: { status: 'pending', balance: Number(w.rows[0].balance) },
+          after: { status: 'disbursed', balance: newBalance } });
       return r.rows[0];
     });
 
-    audit(req, `loan.${status}`, 'loan', result.id, { amount: Number(result.amount) });
     notify(result.user_id, status === 'approved'
       ? { title: 'Loan approved', body: `Your loan of ${result.amount} has been disbursed to your wallet.`, link: '/loans' }
       : { title: 'Loan application update', body: 'Your loan application was not approved. Contact support for details.', link: '/loans' });
@@ -199,6 +205,8 @@ router.post('/dividends', requirePerm('dividends.manage'), async (req, res) => {
           `INSERT INTO dividends (user_id, amount, period) VALUES ($1,$2,$3) RETURNING *`,
           [userId, toMoney(amount), period]
         );
+        await auditTx(client, req, 'dividend.declared', 'dividend', r.rows[0].id,
+          { period, amount: Number(r.rows[0].amount), member: userId });
         return [r.rows[0]];
       }
 
@@ -215,10 +223,11 @@ router.post('/dividends', requirePerm('dividends.manage'), async (req, res) => {
         );
         out.push(r.rows[0]);
       }
+      await auditTx(client, req, 'dividend.declared', 'dividend', null,
+        { period, count: out.length, perMember: per });
       return out;
     });
 
-    audit(req, 'dividend.declared', 'dividend', null, { period, count: inserted.length });
     for (const d of inserted) {
       notify(d.user_id, {
         title: 'Dividend declared',
@@ -256,9 +265,12 @@ router.patch('/dividends/:id/pay', requirePerm('dividends.manage'), async (req, 
         `UPDATE dividends SET status='paid', transaction_id=$1 WHERE id=$2 RETURNING *`,
         [tx.rows[0].id, div.id]
       );
+      await auditTx(client, req, 'dividend.paid', 'dividend', div.id,
+        { amount: Number(div.amount) },
+        { before: { status: 'pending', balance: Number(w.rows[0].balance) },
+          after: { status: 'paid', balance: newBalance } });
       return r.rows[0];
     });
-    audit(req, 'dividend.paid', 'dividend', result.id, { amount: Number(result.amount) });
     notify(result.user_id, {
       title: 'Dividend paid',
       body: `${result.amount} for ${result.period} is now in your wallet.`,
@@ -299,7 +311,7 @@ router.post('/loan-products', requirePerm('loans.review'), asyncHandler(async (r
         minMembershipMonths ?? 0, !!requiresGuarantors, guarantorCount ?? 0,
       ]
     );
-    audit(req, 'loan_product.created', 'loan_product', rows[0].id, { name });
+    audit(req, 'loan_product.created', 'loan_product', rows[0].id, { name }, { after: rows[0] });
     res.status(201).json(rows[0]);
   } catch (e) {
     if (e.code === '23505') return res.status(409).json({ message: 'A product with that name exists' });
@@ -323,13 +335,16 @@ router.patch('/loan-products/:id', requirePerm('loans.review'), asyncHandler(asy
     }
   }
   if (!sets.length) return res.status(400).json({ message: 'Nothing to update' });
+  const before = await query('SELECT * FROM loan_products WHERE id = $1', [req.params.id]);
+  if (!before.rows[0]) return res.status(404).json({ message: 'Product not found' });
   params.push(req.params.id);
   const { rows } = await query(
     `UPDATE loan_products SET ${sets.join(', ')} WHERE id = $${params.length} RETURNING *`,
     params
   );
   if (!rows[0]) return res.status(404).json({ message: 'Product not found' });
-  audit(req, 'loan_product.updated', 'loan_product', rows[0].id, { name: rows[0].name });
+  audit(req, 'loan_product.updated', 'loan_product', rows[0].id,
+    { name: rows[0].name }, { before: before.rows[0], after: rows[0] });
   res.json(rows[0]);
 }));
 
@@ -353,6 +368,7 @@ router.get('/export/transactions.csv', requirePerm('exports'), asyncHandler(asyn
   sendCsv(res, 'mpcs-transactions.csv',
     ['Date', 'Member Email', 'Reference', 'Type', 'Description', 'Amount', 'Balance After'],
     rows.map((t) => [t.created_at, t.email, t.reference, t.type, t.description, t.amount, t.balance_after]));
+  audit(req, 'export.downloaded', 'export', null, { file: 'mpcs-transactions.csv', rows: rows.length });
 }));
 
 router.get('/export/loans.csv', requirePerm('exports'), asyncHandler(async (req, res) => {
@@ -365,6 +381,7 @@ router.get('/export/loans.csv', requirePerm('exports'), asyncHandler(async (req,
   sendCsv(res, 'mpcs-loans.csv',
     ['ID', 'Member Email', 'Amount', 'Rate %', 'Months', 'Repayable', 'Paid', 'Penalties', 'Status', 'Created'],
     rows.map((l) => [l.id, l.email, l.amount, l.interest_rate, l.duration_months, l.total_repayable, l.amount_paid, l.penalty_accrued, l.status, l.created_at]));
+  audit(req, 'export.downloaded', 'export', null, { file: 'mpcs-loans.csv', rows: rows.length });
 }));
 
 router.get('/export/members.csv', requirePerm('exports'), asyncHandler(async (req, res) => {
@@ -377,6 +394,7 @@ router.get('/export/members.csv', requirePerm('exports'), asyncHandler(async (re
   sendCsv(res, 'mpcs-members.csv',
     ['First Name', 'Last Name', 'Email', 'Phone', 'Role', 'Status', 'Joined', 'Wallet Balance'],
     rows.map((u) => [u.first_name, u.last_name, u.email, u.phone, u.role, u.status, u.created_at, u.balance]));
+  audit(req, 'export.downloaded', 'export', null, { file: 'mpcs-members.csv', rows: rows.length });
 }));
 
 /* ---------- Manual funding (officer credits a member by email/account) ---------- */
@@ -417,10 +435,12 @@ router.post('/fund', requirePerm('fund'), asyncHandler(async (req, res) => {
       `INSERT INTO notifications (user_id, title, body, link) VALUES ($1,$2,$3,$4)`,
       [target.id, 'Wallet funded', `${amt} NGN was added to your wallet by an officer.`, '/wallet']
     );
+    await auditTx(client, req, 'wallet.funded_manual', 'user', target.id,
+      { amount: amt, note: note || null },
+      { before: { balance: Number(w.rows[0].balance) }, after: { balance: newBalance } });
     return { member: `${target.first_name} ${target.last_name}`, transaction: tx.rows[0], balance: newBalance };
   });
 
-  audit(req, 'wallet.funded_manual', 'user', result.transaction.user_id, { amount: amt, note: note || null });
   await settleDueCollections(withTransaction, result.transaction.user_id);
   await runDuePlans();
   res.status(201).json(result);

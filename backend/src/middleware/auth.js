@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { query } from '../db.js';
 import { hasPerm } from '../lib/permissions.js';
+import { audit } from '../lib/audit.js';
 
 export async function authenticate(req, res, next) {
   try {
@@ -37,7 +38,11 @@ export function requirePerm(...perms) {
   return (req, res, next) => {
     if (!req.user) return res.status(401).json({ message: 'Authentication required' });
     const ok = perms.some((p) => hasPerm(req.user.role, p));
-    if (!ok) return res.status(403).json({ message: 'Insufficient permissions' });
+    if (!ok) {
+      audit(req, 'auth.forbidden', 'auth', null,
+        { path: req.originalUrl, required: perms }, { outcome: 'failure' });
+      return res.status(403).json({ message: 'Insufficient permissions' });
+    }
     next();
   };
 }

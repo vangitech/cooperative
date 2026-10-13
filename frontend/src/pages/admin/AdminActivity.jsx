@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
-const ENTITIES = ['', 'user', 'kyc', 'guarantor', 'loan', 'dividend', 'payment_intent'];
+const ENTITIES = ['', 'user', 'auth', 'kyc', 'guarantor', 'loan', 'dividend', 'payment_intent', 'report', 'export'];
 
 export default function AdminActivity() {
   const [logs, setLogs] = useState([]);
@@ -69,7 +69,9 @@ export default function AdminActivity() {
               <TableRow>
                 <TableHead>Time</TableHead>
                 <TableHead>Actor</TableHead>
+                <TableHead>Role</TableHead>
                 <TableHead>Action</TableHead>
+                <TableHead>Outcome</TableHead>
                 <TableHead>Entity</TableHead>
                 <TableHead>Details</TableHead>
               </TableRow>
@@ -83,7 +85,13 @@ export default function AdminActivity() {
                   <TableCell className="text-sm">
                     {l.email || (l.actor_id ? `user #${l.actor_id}` : <span className="text-muted-foreground">system</span>)}
                   </TableCell>
+                  <TableCell className="text-sm text-muted-foreground capitalize">{l.actor_role || '—'}</TableCell>
                   <TableCell><Badge variant="outline" className="font-mono text-xs">{l.action}</Badge></TableCell>
+                  <TableCell>
+                    <Badge variant={l.outcome === 'failure' ? 'destructive' : 'success'} className="text-xs">
+                      {l.outcome || 'success'}
+                    </Badge>
+                  </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     {l.entity ? `${l.entity}${l.entity_id ? ` #${l.entity_id}` : ''}` : '—'}
                   </TableCell>
@@ -93,7 +101,7 @@ export default function AdminActivity() {
                 </TableRow>
               ))}
               {logs.length === 0 && (
-                <TableRow><TableCell colSpan={5} className="text-center text-muted-foreground py-8">No activity yet</TableCell></TableRow>
+                <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-8">No activity yet</TableCell></TableRow>
               )}
             </TableBody>
           </Table>
