@@ -22,12 +22,8 @@ connections are settlement rails, not replacements.
 
 > Done and moved to `updatedone v1.md`: L1 (chart + journals core, live),
 > L2 (posting templates, maker-checker, period locks, live), Migration
-> (history backfilled + disclosed ₦1,500 opening adjustment).
-
-## L3 — Reconciliation engine + suspense
-- Nightly internal check (Σ wallets = control account; Σ debits = Σ credits) and external check (settlement float = provider statement).
-- Mismatches → suspense queue for accountants, never auto-adjusted.
-- Acceptance: drift detected within 24h with an actionable queue.
+> (history backfilled + disclosed ₦1,500 opening adjustment), L3
+> (reconciliation engine + suspense queue, live).
 
 ## L4 — Provider adapters (CBS/MFB/bank connectivity)
 - One adapter interface (`initiate, verify, parseWebhook, fetchStatement`); Flutterwave becomes adapter #1, MFB/CBS adapter #2 on their API docs.
@@ -47,16 +43,8 @@ contribution, under maker-checker control. Kills the current flaws: unbacked
 declarations, equal-split unfairness, single-actor declare-and-pay, double
 declaration of a period.
 
-## D1 — Guards on the current flow (small, no schema drama)
-- `UNIQUE(period, user_id)` on `dividends`; idempotent declare per period.
-- New `approved` status + approver columns: `proposed → approved → paid`.
-- Accountant proposes, admin approves, batch-pay whole period atomically.
-- Acceptance: same period can't pay twice; no half-paid periods; single actor can't declare-and-pay.
-
-## D2 — Surplus computation + policy cap (needs ledger L1/L2)
-- Surplus(period) = interest + fees + penalties + markup − expenses − provisions, straight from journal income/expense accounts.
-- Enforce: total declared ≤ surplus × payout ratio (e.g. 60% members / 40% statutory + general reserves).
-- Acceptance: over-surplus declaration rejected in code, not convention.
+> Done and moved to `updatedone v1.md`: D1 (approve flow + batch pay, live),
+> D2 (surplus computation + policy cap, live).
 
 ## D3 — Pro-rata engine + shares path
 - Basis per declaration: `savings` (member balance ÷ total savings × pool); keep `equal` as explicit override only.

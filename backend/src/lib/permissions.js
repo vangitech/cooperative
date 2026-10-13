@@ -28,6 +28,7 @@ export const ROLE_PERMS = {
     'dividends.manage',
     'orgs.read',
     'adjustments.propose',
+    'books.reconcile',
     'reports.read',
     'fund',
     'exports',

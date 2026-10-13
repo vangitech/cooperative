@@ -139,3 +139,32 @@ export async function trialBalance() {
   );
   return rows;
 }
+
+// D2 surplus: income minus expenses for a YYYY-MM journal period.
+// The dividend policy cap is computed from this — declarations cannot
+// exceed surplus × payout ratio.
+export const DEFAULT_PAYOUT_RATIO = 0.6;
+
+export async function surplusForMonth(month) {
+  if (!/^\d{4}-\d{2}$/.test(month || '')) {
+    const err = new Error('Month must be YYYY-MM');
+    err.status = 400;
+    throw err;
+  }
+  const { rows } = await query(
+    `SELECT a.type, COALESCE(SUM(l.credit - l.debit),0) AS net
+     FROM journal_lines l
+     JOIN journal_entries e ON e.id = l.entry_id
+     JOIN accounts a ON a.id = l.account_id
+     WHERE e.period = $1 AND a.type IN ('income','expense')
+     GROUP BY a.type`,
+    [month]
+  );
+  let income = 0;
+  let expenses = 0;
+  for (const r of rows) {
+    if (r.type === 'income') income = Number(r.net);
+    else expenses = -Number(r.net);
+  }
+  return { month, income, expenses, surplus: income - expenses };
+}

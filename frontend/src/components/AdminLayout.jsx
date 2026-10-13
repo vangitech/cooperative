@@ -19,7 +19,7 @@ import {
 import {
   LayoutDashboard, Users, HandCoins, TrendingUp, Receipt,
   Menu, LogOut, User as UserIcon, Shield, Home, Search, ScrollText, Store, Megaphone,
-  PanelLeftClose, PanelLeftOpen, FileText, Building2,
+  PanelLeftClose, PanelLeftOpen, FileText, Building2, Scale,
 } from 'lucide-react';
 
 const adminNav = [
@@ -31,6 +31,7 @@ const adminNav = [
   { to: '/admin/dividends',   label: 'Dividends',    icon: TrendingUp, roles: ['admin', 'accountant'] },
   { to: '/admin/transactions', label: 'Transactions', icon: Receipt, roles: ['admin', 'accountant'] },
   { to: '/admin/reports', label: 'Reports', icon: FileText, roles: ['admin', 'officer', 'accountant'] },
+  { to: '/admin/reconcile', label: 'Reconcile', icon: Scale, roles: ['admin', 'accountant'] },
   { to: '/admin/activity',    label: 'Activity Log', icon: ScrollText, roles: ['admin', 'officer', 'accountant'] },
   { to: '/admin/notices',     label: 'Notices',      icon: Megaphone, roles: ['admin', 'officer'] },
 ];
@@ -44,6 +45,7 @@ const routeTitles = {
   '/admin/dividends': 'Dividends',
   '/admin/transactions': 'Transactions',
   '/admin/reports': 'Reports',
+  '/admin/reconcile': 'Reconcile',
   '/admin/activity': 'Activity Log',
   '/admin/notices': 'Notices',
 };

@@ -29,6 +29,7 @@ const AdminStore = lazy(() => import('@/pages/admin/AdminStore'));
 const AdminNotices = lazy(() => import('@/pages/admin/AdminNotices'));
 const AdminReports = lazy(() => import('@/pages/admin/AdminReports'));
 const AdminOrgs = lazy(() => import('@/pages/admin/AdminOrgs'));
+const AdminReconcile = lazy(() => import('@/pages/admin/AdminReconcile'));
 
 function PageFallback() {
   return (
@@ -76,6 +77,7 @@ export default function App() {
               <Route path="notices" element={<AdminNotices />} />
               <Route path="reports" element={<AdminReports />} />
               <Route path="organisations" element={<AdminOrgs />} />
+              <Route path="reconcile" element={<AdminReconcile />} />
             </Route>
 
             <Route path="/" element={<Navigate to="/dashboard" replace />} />

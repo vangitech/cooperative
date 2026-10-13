@@ -541,3 +541,43 @@ ALTER TABLE public.adjustments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.close_periods ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.adjustments FROM anon, authenticated;
 REVOKE ALL ON TABLE public.close_periods FROM anon, authenticated;
+
+-- L3 reconciliation: run history + suspense queue (never auto-adjusted).
+CREATE TABLE IF NOT EXISTS reconciliation_runs (
+  id SERIAL PRIMARY KEY,
+  run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  run_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  channel VARCHAR(20) NOT NULL DEFAULT 'web',
+  checks JSONB NOT NULL,
+  passed BOOLEAN NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_recon_time ON reconciliation_runs(run_at DESC);
+
+CREATE TABLE IF NOT EXISTS suspense_items (
+  id SERIAL PRIMARY KEY,
+  kind VARCHAR(40) NOT NULL,
+  period VARCHAR(7),
+  expected NUMERIC(15,2) NOT NULL DEFAULT 0,
+  actual NUMERIC(15,2) NOT NULL DEFAULT 0,
+  detail JSONB,
+  status VARCHAR(20) NOT NULL DEFAULT 'open',
+  resolved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  resolution TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  resolved_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_suspense_status ON suspense_items(status, created_at DESC);
+
+ALTER TABLE public.reconciliation_runs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.suspense_items ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.reconciliation_runs FROM anon, authenticated;
+REVOKE ALL ON TABLE public.suspense_items FROM anon, authenticated;
+
+-- D1 dividend guards: maker-checker columns + one declaration per member/period.
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS approved_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE dividends ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'dividends_period_user_unique') THEN
+    ALTER TABLE dividends ADD CONSTRAINT dividends_period_user_unique UNIQUE (period, user_id);
+  END IF;
+END $$;

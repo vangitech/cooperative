@@ -4,6 +4,7 @@ import { authenticate, requirePerm } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/helpers.js';
 import { audit, auditTx } from '../lib/audit.js';
 import { postJournal, periodOf, trialBalance } from '../lib/ledger.js';
+import { runReconciliation, suspenseList } from '../lib/reconcile.js';
 
 const router = express.Router();
 router.use(authenticate);
@@ -146,6 +147,71 @@ router.get(
     const dr = tb.reduce((s, a) => s + Number(a.debit), 0);
     const cr = tb.reduce((s, a) => s + Number(a.credit), 0);
     res.json({ balanced: Math.abs(dr - cr) < 0.005, lines: tb });
+  })
+);
+
+// L3 reconciliation runs + suspense queue (back-office only).
+router.post(
+  '/reconcile/run',
+  requirePerm('books.reconcile'),
+  asyncHandler(async (req, res) => {
+    const { statements } = req.body || {};
+    if (statements !== undefined) {
+      if (!Array.isArray(statements)) return res.status(400).json({ message: 'statements must be an array' });
+      for (const s of statements) {
+        if (!s.code || !(Number(s.balance) >= 0))
+          return res.status(400).json({ message: 'Each statement needs { code, balance >= 0 }' });
+      }
+    }
+    const result = await withTransaction(async (client) => {
+      const out = await runReconciliation(client, {
+        actorId: req.user.id, channel: 'web', statements: statements || [],
+      });
+      await auditTx(client, req, 'recon.run', 'reconciliation', out.runId, {
+        passed: out.passed, checks: out.checks.length,
+      });
+      return out;
+    });
+    res.status(201).json(result);
+  })
+);
+
+router.get(
+  '/reconcile/runs',
+  requirePerm('books.reconcile'),
+  asyncHandler(async (req, res) => {
+    const { rows } = await query(
+      `SELECT r.*, u.email AS run_by_email FROM reconciliation_runs r
+       LEFT JOIN users u ON u.id = r.run_by ORDER BY r.run_at DESC LIMIT 50`
+    );
+    res.json(rows);
+  })
+);
+
+router.get(
+  '/suspense',
+  requirePerm('books.reconcile'),
+  asyncHandler(async (req, res) => {
+    res.json(await suspenseList(req.query.status));
+  })
+);
+
+router.patch(
+  '/suspense/:id/resolve',
+  requirePerm('books.reconcile'),
+  asyncHandler(async (req, res) => {
+    const { resolution } = req.body || {};
+    if (!resolution || !String(resolution).trim())
+      return res.status(400).json({ message: 'A resolution note is required' });
+    const { rows } = await query(
+      `UPDATE suspense_items SET status = 'resolved', resolved_by = $1,
+        resolution = $2, resolved_at = NOW()
+       WHERE id = $3 AND status = 'open' RETURNING *`,
+      [req.user.id, String(resolution).trim(), req.params.id]
+    );
+    if (!rows[0]) return res.status(404).json({ message: 'Open suspense item not found' });
+    audit(req, 'recon.resolved', 'suspense', rows[0].id, { kind: rows[0].kind, resolution: rows[0].resolution });
+    res.json(rows[0]);
   })
 );
 

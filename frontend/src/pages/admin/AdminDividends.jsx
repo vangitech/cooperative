@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
+import { useAuth } from '@/context/AuthContext';
 import { formatCurrency, formatDate, initials } from '@/lib/format';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -19,17 +20,33 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter,
   DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
-import { MoreHorizontal, Send, CheckCircle2, Coins } from 'lucide-react';
+import { MoreHorizontal, Send, CheckCircle2, Coins, ShieldCheck, Layers } from 'lucide-react';
+
+const statusVariant = { pending: 'warning', approved: 'default', paid: 'success' };
 
 export default function AdminDividends() {
+  const { user } = useAuth();
   const [list, setList] = useState(null);
   const [form, setForm] = useState({ period: '', totalAmount: '' });
   const [submitting, setSubmitting] = useState(false);
   const [payTarget, setPayTarget] = useState(null);
   const [paying, setPaying] = useState(false);
+  const [capMonth, setCapMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [surplus, setSurplus] = useState(null);
+  const [payPeriod, setPayPeriod] = useState('');
+  const [payingPeriod, setPayingPeriod] = useState(false);
 
   const load = () => api.get('/admin/dividends').then(setList).catch((e) => toast.error(e.message));
   useEffect(() => { load(); }, []);
+
+  const loadSurplus = async (month) => {
+    try {
+      setSurplus(await api.get(`/admin/dividends/surplus?month=${month}`));
+    } catch {
+      setSurplus(null);
+    }
+  };
+  useEffect(() => { loadSurplus(capMonth); }, [capMonth]);
 
   const declare = async (e) => {
     e.preventDefault();
@@ -39,12 +56,33 @@ export default function AdminDividends() {
       const r = await api.post('/admin/dividends', {
         period: form.period,
         totalAmount: Number(form.totalAmount),
+        capMonth,
       });
       toast.success(`Dividend declared for ${r.count} members`);
       setForm({ period: '', totalAmount: '' });
       load();
     } catch (e) { toast.error(e.message); }
     finally { setSubmitting(false); }
+  };
+
+  const approve = async (d) => {
+    try {
+      await api.patch(`/admin/dividends/${d.id}/approve`);
+      toast.success(`Approved ${formatCurrency(d.amount)} for ${d.first_name}`);
+      load();
+    } catch (e) { toast.error(e.message); }
+  };
+
+  const payWholePeriod = async () => {
+    if (!payPeriod) return;
+    setPayingPeriod(true);
+    try {
+      const r = await api.post('/admin/dividends/pay-period', { period: payPeriod });
+      toast.success(`Paid ${r.count} dividends for ${r.period}`);
+      setPayPeriod('');
+      load();
+    } catch (e) { toast.error(e.message); }
+    finally { setPayingPeriod(false); }
   };
 
   const pay = async () => {
@@ -61,6 +99,10 @@ export default function AdminDividends() {
   const pendingCount = (list || []).filter((d) => d.status === 'pending').length;
   const pendingTotal = (list || []).filter((d) => d.status === 'pending')
     .reduce((s, d) => s + Number(d.amount), 0);
+  const approvedCount = (list || []).filter((d) => d.status === 'approved').length;
+  const approvedTotal = (list || []).filter((d) => d.status === 'approved')
+    .reduce((s, d) => s + Number(d.amount), 0);
+  const isAdmin = user?.role === 'admin';
 
   return (
     <>
@@ -85,11 +127,30 @@ export default function AdminDividends() {
                 <Input type="number" placeholder="0.00" value={form.totalAmount}
                        onChange={(e) => setForm({ ...form, totalAmount: e.target.value })} required />
               </div>
+              <div>
+                <Label>Cap against surplus month</Label>
+                <Input type="month" value={capMonth} onChange={(e) => setCapMonth(e.target.value)} />
+                {surplus ? (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Surplus {formatCurrency(surplus.surplus)} · max distributable{' '}
+                    <span className="font-semibold text-foreground">{formatCurrency(surplus.maxDistributable)}</span>{' '}
+                    ({Math.round(surplus.payoutRatio * 100)}%)
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground mt-1">Surplus unavailable — declaration uncapped</p>
+                )}
+              </div>
               <Separator />
               <div className="flex items-center justify-between text-sm text-muted-foreground">
-                <span>Pending payouts</span>
+                <span>Pending approval</span>
                 <span className="font-medium text-foreground">
                   {pendingCount} · {formatCurrency(pendingTotal)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-sm text-muted-foreground">
+                <span>Approved, unpaid</span>
+                <span className="font-medium text-foreground">
+                  {approvedCount} · {formatCurrency(approvedTotal)}
                 </span>
               </div>
               <Button type="submit" className="w-full" disabled={submitting}>
@@ -97,6 +158,20 @@ export default function AdminDividends() {
                 {submitting ? 'Declaring…' : 'Declare Dividend'}
               </Button>
             </form>
+          </CardContent>
+        </Card>
+
+        {/* Pay whole period */}
+        <Card className="h-fit lg:col-span-3">
+          <CardContent className="p-4 flex flex-col sm:flex-row sm:items-end gap-3">
+            <div className="flex-1">
+              <Label>Pay approved period (atomic — all or nothing)</Label>
+              <Input placeholder="e.g. 2025 Q1" value={payPeriod} onChange={(e) => setPayPeriod(e.target.value)} />
+            </div>
+            <Button onClick={payWholePeriod} disabled={payingPeriod || !payPeriod} variant="outline">
+              <Layers className="h-4 w-4" />
+              {payingPeriod ? 'Paying…' : 'Pay Period'}
+            </Button>
           </CardContent>
         </Card>
 
@@ -150,12 +225,16 @@ export default function AdminDividends() {
                     <TableCell className="text-sm">{d.period}</TableCell>
                     <TableCell className="text-right font-medium">{formatCurrency(d.amount)}</TableCell>
                     <TableCell>
-                      <Badge variant={d.status === 'paid' ? 'success' : 'warning'} className="capitalize">
+                      <Badge variant={statusVariant[d.status] || 'warning'} className="capitalize">
                         {d.status}
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      {d.status === 'pending' ? (
+                      {d.status === 'pending' && isAdmin ? (
+                        <Button variant="ghost" size="sm" onClick={() => approve(d)}>
+                          <ShieldCheck className="h-4 w-4" /> Approve
+                        </Button>
+                      ) : d.status === 'approved' ? (
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button variant="ghost" size="icon" className="h-8 w-8">
@@ -170,6 +249,8 @@ export default function AdminDividends() {
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
+                      ) : d.status === 'pending' ? (
+                        <span className="text-xs text-muted-foreground">Awaiting admin approval</span>
                       ) : (
                         <span className="text-xs text-muted-foreground">Settled</span>
                       )}

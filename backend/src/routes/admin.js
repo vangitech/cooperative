@@ -7,6 +7,7 @@ import { generateRef, toMoney, isPositiveNumber, asyncHandler, sendCsv } from '.
 import { audit, auditTx } from '../lib/audit.js';
 import { nextMemberNo, verifyKyc, validateDocument, ID_TYPES } from '../lib/onboarding.js';
 import { postJournal } from '../lib/ledger.js';
+import { surplusForMonth, DEFAULT_PAYOUT_RATIO, periodOf } from '../lib/ledger.js';
 import { assignVirtualAccount } from '../lib/virtualAccounts.js';
 import { ensureSchedules } from '../lib/loans.js';
 import { notify } from '../lib/notify.js';
@@ -369,53 +370,70 @@ router.get('/dividends', requirePerm('dividends.manage'), asyncHandler(async (re
   res.json(rows);
 }));
 
-// Declare a dividend. If totalAmount provided → distributed equally among active members.
-// If userId + amount provided → single member.
+// Declare a dividend (propose). If totalAmount provided → distributed equally
+// among active members. If userId + amount provided → single member.
+// D1: one declaration per member+period (409 on retry); rows land as pending.
+// D2: pass capMonth (YYYY-MM) to enforce totalAmount ≤ surplus × payoutRatio.
 router.post('/dividends', requirePerm('dividends.manage'), async (req, res) => {
   try {
-    const { period, totalAmount, userId, amount } = req.body;
+    const { period, totalAmount, userId, amount, capMonth, payoutRatio } = req.body;
     if (!period) return res.status(400).json({ message: 'Period is required (e.g. "2025 Q1")' });
 
-    const inserted = await withTransaction(async (client) => {
-      if (userId) {
-        if (!isPositiveNumber(amount)) throw new Error('Amount is required for single member');
+    let cap = null;
+    const ratio = payoutRatio !== undefined ? Number(payoutRatio) : DEFAULT_PAYOUT_RATIO;
+    if (payoutRatio !== undefined && !(ratio > 0 && ratio <= 1))
+      throw new Error('payoutRatio must be between 0 and 1');
+    if (capMonth) {
+      const s = await surplusForMonth(capMonth);
+      cap = { ...s, ratio, maxDistributable: toMoney(Math.max(0, s.surplus * ratio)) };
+    }
+    const enforceCap = (total) => {
+      if (cap && Number(total) > cap.maxDistributable) {
+        throw new Error(
+          `₦${total} exceeds the distributable cap of ₦${cap.maxDistributable} ` +
+          `(surplus ₦${cap.surplus} × ${Math.round(cap.ratio * 100)}% for ${cap.month})`
+        );
+      }
+    };
+
+    const declareTx = async (client, uid, amt) => {
+      try {
         const r = await client.query(
           `INSERT INTO dividends (user_id, amount, period) VALUES ($1,$2,$3) RETURNING *`,
-          [userId, toMoney(amount), period]
+          [uid, toMoney(amt), period]
         );
         await postJournal(client, req, { type: 'dividend_declared',
-          reference: `${period} → user #${userId}`, amount: Number(r.rows[0].amount),
+          reference: `${period} → user #${uid}`, amount: Number(r.rows[0].amount),
           lines: [
             { code: '3002', debit: Number(r.rows[0].amount), credit: 0 },
             { code: '2002', debit: 0, credit: Number(r.rows[0].amount) },
           ] });
         await auditTx(client, req, 'dividend.declared', 'dividend', r.rows[0].id,
-          { period, amount: Number(r.rows[0].amount), member: userId });
-        return [r.rows[0]];
+          { period, amount: Number(r.rows[0].amount), member: uid, cap });
+        return r.rows[0];
+      } catch (e) {
+        if (e.code === '23505') throw new Error(`Member #${uid} already declared for ${period}`);
+        throw e;
+      }
+    };
+
+    const inserted = await withTransaction(async (client) => {
+      if (userId) {
+        if (!isPositiveNumber(amount)) throw new Error('Amount is required for single member');
+        enforceCap(amount);
+        return [await declareTx(client, userId, amount)];
       }
 
       if (!isPositiveNumber(totalAmount)) throw new Error('totalAmount or userId+amount required');
+      enforceCap(totalAmount);
       const members = await client.query(`SELECT id FROM users WHERE role='member' AND status='active'`);
       if (!members.rows.length) throw new Error('No active members');
       const per = toMoney(Number(totalAmount) / members.rows.length);
 
       const out = [];
       for (const m of members.rows) {
-        const r = await client.query(
-          `INSERT INTO dividends (user_id, amount, period) VALUES ($1,$2,$3) RETURNING *`,
-          [m.id, per, period]
-        );
-        out.push(r.rows[0]);
+        out.push(await declareTx(client, m.id, per));
       }
-      // One distribution entry for the whole declaration (payable up).
-      await postJournal(client, req, { type: 'dividend_declared',
-        reference: `${period} × ${out.length} members`, amount: toMoney(per * out.length),
-        lines: [
-          { code: '3002', debit: toMoney(per * out.length), credit: 0 },
-          { code: '2002', debit: 0, credit: toMoney(per * out.length) },
-        ] });
-      await auditTx(client, req, 'dividend.declared', 'dividend', null,
-        { period, count: out.length, perMember: per });
       return out;
     });
 
@@ -439,6 +457,7 @@ router.patch('/dividends/:id/pay', requirePerm('dividends.manage'), async (req, 
       const div = d.rows[0];
       if (!div) throw new Error('Dividend not found');
       if (div.status === 'paid') throw new Error('Already paid');
+      if (div.status !== 'approved') throw new Error('Dividend must be approved before payout');
 
       const w = await client.query('SELECT * FROM wallets WHERE user_id=$1 FOR UPDATE', [div.user_id]);
       const newBalance = toMoney(Number(w.rows[0].balance) + Number(div.amount));
@@ -480,6 +499,79 @@ router.patch('/dividends/:id/pay', requirePerm('dividends.manage'), async (req, 
     res.status(400).json({ message: e.message });
   }
 });
+
+// D1: approve a proposed dividend (admin-only: declarer cannot self-approve).
+router.patch('/dividends/:id/approve', requirePerm('*'), asyncHandler(async (req, res) => {
+  const { rows } = await query(
+    `UPDATE dividends SET status = 'approved', approved_by = $1, approved_at = NOW()
+     WHERE id = $2 AND status = 'pending' RETURNING *`,
+    [req.user.id, req.params.id]
+  );
+  if (!rows[0]) return res.status(404).json({ message: 'Pending dividend not found' });
+  audit(req, 'dividend.approved', 'dividend', rows[0].id,
+    { period: rows[0].period, amount: Number(rows[0].amount) });
+  res.json(rows[0]);
+}));
+
+// D1: pay a whole approved period atomically — no half-paid periods.
+router.post('/dividends/pay-period', requirePerm('dividends.manage'), async (req, res) => {
+  try {
+    const { period } = req.body;
+    if (!period) return res.status(400).json({ message: 'Period is required' });
+    const paid = await withTransaction(async (client) => {
+      const list = await client.query(
+        `SELECT * FROM dividends WHERE period = $1 AND status = 'approved' ORDER BY id FOR UPDATE`,
+        [period]
+      );
+      if (!list.rows.length) throw new Error('No approved dividends for this period');
+      const out = [];
+      for (const div of list.rows) {
+        const w = await client.query('SELECT * FROM wallets WHERE user_id = $1 FOR UPDATE', [div.user_id]);
+        const newBalance = toMoney(Number(w.rows[0].balance) + Number(div.amount));
+        await client.query('UPDATE wallets SET balance = $1, updated_at = NOW() WHERE user_id = $2', [
+          newBalance, div.user_id,
+        ]);
+        const tx = await client.query(
+          `INSERT INTO transactions (user_id, wallet_id, type, amount, balance_after, reference, description)
+           VALUES ($1,$2,'dividend',$3,$4,$5,$6) RETURNING *`,
+          [div.user_id, w.rows[0].id, div.amount, newBalance, generateRef('DIV'), `Dividend ${div.period}`]
+        );
+        const r = await client.query(
+          `UPDATE dividends SET status = 'paid', transaction_id = $1 WHERE id = $2 RETURNING *`,
+          [tx.rows[0].id, div.id]
+        );
+        await auditTx(client, req, 'dividend.paid', 'dividend', div.id,
+          { amount: Number(div.amount), batch: period },
+          { before: { status: 'approved', balance: Number(w.rows[0].balance) },
+            after: { status: 'paid', balance: newBalance } });
+        await postJournal(client, req, { type: 'dividend', transactionId: tx.rows[0].id,
+          reference: tx.rows[0].reference, amount: Number(div.amount),
+          lines: [
+            { code: '2002', debit: Number(div.amount), credit: 0 },
+            { code: '1100', debit: 0, credit: Number(div.amount) },
+          ] });
+        out.push(r.rows[0]);
+        notify(div.user_id, {
+          title: 'Dividend paid',
+          body: `${div.amount} for ${div.period} is now in your wallet.`,
+          link: '/dividends',
+        });
+      }
+      return out;
+    });
+    res.json({ period, count: paid.length, dividends: paid });
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+});
+
+// D2: surplus + distributable cap for a journal month (YYYY-MM).
+router.get('/dividends/surplus', requirePerm('dividends.manage'), asyncHandler(async (req, res) => {
+  const month = req.query.month || periodOf(new Date());
+  const s = await surplusForMonth(month);
+  const ratio = DEFAULT_PAYOUT_RATIO;
+  res.json({ ...s, payoutRatio: ratio, maxDistributable: toMoney(Math.max(0, s.surplus * ratio)) });
+}));
 
 /* ---------- Loan products ---------- */
 router.get('/loan-products', requirePerm('loans.read'), asyncHandler(async (req, res) => {
