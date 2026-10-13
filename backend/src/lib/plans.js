@@ -1,6 +1,7 @@
 import { query, withTransaction } from '../db.js';
 import { toMoney, generateRef } from '../utils/helpers.js';
 import { auditTx, systemReq, SYSTEM_CHANNEL } from './audit.js';
+import { postJournal } from './ledger.js';
 
 // Next occurrence of a day-of-month (clamped to month length implicitly
 // by rolling to the 1st when the day already passed this month).
@@ -49,6 +50,8 @@ export async function executePlan(client, plan) {
     { amount: amt },
     { before: { balance: Number(w.rows[0].balance) }, after: { balance: newBalance },
       channel: SYSTEM_CHANNEL });
+  await postJournal(client, systemReq, { type: 'savings', transactionId: tx.rows[0].id,
+    reference: tx.rows[0].reference, amount: amt, direction: 'out', channel: SYSTEM_CHANNEL });
   return 'paid';
 }
 

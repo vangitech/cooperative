@@ -436,3 +436,69 @@ REVOKE ALL ON TABLE public.organisations FROM anon, authenticated;
 REVOKE ALL ON TABLE public.organisation_members FROM anon, authenticated;
 REVOKE ALL ON TABLE public.org_counters FROM anon, authenticated;
 REVOKE ALL ON TABLE public.kyc_documents FROM anon, authenticated;
+
+-- L1 ledger: double-entry journal under the wallet ledger.
+-- One header per movement (+ N lines, so L2 splits need no schema change).
+-- source_transaction_id is UNIQUE: retries/webhook replays can never double-post.
+CREATE TABLE IF NOT EXISTS accounts (
+  id SERIAL PRIMARY KEY,
+  code VARCHAR(20) UNIQUE NOT NULL,
+  name VARCHAR(160) NOT NULL,
+  type VARCHAR(20) NOT NULL,
+  provider VARCHAR(40),
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE SEQUENCE IF NOT EXISTS journal_entry_seq START 100001;
+
+CREATE TABLE IF NOT EXISTS journal_entries (
+  id SERIAL PRIMARY KEY,
+  entry_no VARCHAR(20) UNIQUE NOT NULL DEFAULT ('JE-' || nextval('journal_entry_seq')),
+  period VARCHAR(7) NOT NULL,
+  source_type VARCHAR(40) NOT NULL,
+  source_transaction_id INTEGER UNIQUE REFERENCES transactions(id) ON DELETE RESTRICT,
+  currency VARCHAR(10) NOT NULL DEFAULT 'NGN',
+  org_id INTEGER REFERENCES organisations(id) ON DELETE SET NULL,
+  actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  actor_role VARCHAR(20),
+  channel VARCHAR(20) NOT NULL DEFAULT 'web',
+  narration TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_journal_period ON journal_entries(period);
+CREATE INDEX IF NOT EXISTS idx_journal_source ON journal_entries(source_transaction_id);
+
+CREATE TABLE IF NOT EXISTS journal_lines (
+  id SERIAL PRIMARY KEY,
+  entry_id INTEGER NOT NULL REFERENCES journal_entries(id) ON DELETE CASCADE,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+  debit NUMERIC(15,2) NOT NULL DEFAULT 0 CHECK (debit >= 0),
+  credit NUMERIC(15,2) NOT NULL DEFAULT 0 CHECK (credit >= 0),
+  CHECK (debit > 0 OR credit > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_lines_entry ON journal_lines(entry_id);
+CREATE INDEX IF NOT EXISTS idx_lines_account ON journal_lines(account_id);
+
+INSERT INTO accounts (code, name, type, provider) VALUES
+  ('1001', 'Settlement Float – General', 'asset', NULL),
+  ('1002', 'Settlement Float – Flutterwave', 'asset', 'flutterwave'),
+  ('1100', 'Member Wallets Control', 'asset', NULL),
+  ('1200', 'Loans Receivable', 'asset', NULL),
+  ('1210', 'Store Receivables', 'asset', NULL),
+  ('2001', 'Member Savings Payable', 'liability', NULL),
+  ('2002', 'Dividends Payable', 'liability', NULL),
+  ('2003', 'Fixed Deposits Payable', 'liability', NULL),
+  ('3001', 'Opening Balance Equity', 'equity', NULL),
+  ('4001', 'Loan Interest Income', 'income', NULL),
+  ('4002', 'Penalty & Fee Income', 'income', NULL),
+  ('4003', 'Store Markup Income', 'income', NULL),
+  ('5001', 'Operating Expenses', 'expense', NULL)
+ON CONFLICT (code) DO NOTHING;
+
+ALTER TABLE public.accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.journal_entries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.journal_lines ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.accounts FROM anon, authenticated;
+REVOKE ALL ON TABLE public.journal_entries FROM anon, authenticated;
+REVOKE ALL ON TABLE public.journal_lines FROM anon, authenticated;

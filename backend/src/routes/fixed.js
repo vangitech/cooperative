@@ -2,7 +2,8 @@ import express from 'express';
 import { query, withTransaction } from '../db.js';
 import { authenticate } from '../middleware/auth.js';
 import { generateRef, isPositiveNumber, toMoney, asyncHandler } from '../utils/helpers.js';
-import { audit, auditTx } from '../lib/audit.js';
+import { auditTx } from '../lib/audit.js';
+import { postJournal } from '../lib/ledger.js';
 
 const router = express.Router();
 router.use(authenticate);
@@ -65,6 +66,8 @@ router.post(
         await auditTx(client, req, 'fixed.locked', 'fixed_deposit', fd.rows[0].id,
           { amount: amt },
           { before: { balance: Number(w.rows[0].balance) }, after: { balance: newBalance } });
+        await postJournal(client, req, { type: 'fixed_deposit', transactionId: tx.rows[0].id,
+          reference: tx.rows[0].reference, amount: amt, direction: 'out' });
         return { fixed: fd.rows[0], transaction: tx.rows[0], balance: newBalance };
       });
 
@@ -119,6 +122,8 @@ router.post(
           { payout },
           { before: { status: 'active', balance: Number(w.rows[0].balance) },
             after: { status: 'matured', balance: newBalance } });
+        await postJournal(client, req, { type: 'fixed_maturity', transactionId: tx.rows[0].id,
+          reference: tx.rows[0].reference, amount: payout, direction: 'in' });
         return { transaction: tx.rows[0], payout, balance: newBalance };
       });
       res.json(result);
@@ -158,6 +163,8 @@ router.post(
           { refunded: amt },
           { before: { status: 'active', balance: Number(w.rows[0].balance) },
             after: { status: 'broken', balance: newBalance } });
+        await postJournal(client, req, { type: 'fixed_break', transactionId: tx.rows[0].id,
+          reference: tx.rows[0].reference, amount: amt, direction: 'in' });
         return { transaction: tx.rows[0], refunded: amt, balance: newBalance };
       });
       res.json(result);

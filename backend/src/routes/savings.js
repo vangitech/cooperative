@@ -3,6 +3,7 @@ import { query, withTransaction } from '../db.js';
 import { authenticate } from '../middleware/auth.js';
 import { generateRef, isPositiveNumber, toMoney, asyncHandler } from '../utils/helpers.js';
 import { auditTx } from '../lib/audit.js';
+import { postJournal } from '../lib/ledger.js';
 
 const router = express.Router();
 router.use(authenticate);
@@ -39,6 +40,8 @@ router.post('/', async (req, res) => {
       await auditTx(client, req, 'savings.deposited', 'savings', s.rows[0].id,
         { amount: amt, savingsType },
         { before: { balance: Number(w.rows[0].balance) }, after: { balance: newBalance } });
+      await postJournal(client, req, { type: 'savings', transactionId: tx.rows[0].id,
+        reference: tx.rows[0].reference, amount: amt, direction: 'in' });
 
       return { savings: s.rows[0], transaction: tx.rows[0], balance: newBalance };
     });

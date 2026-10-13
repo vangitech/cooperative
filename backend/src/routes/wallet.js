@@ -3,6 +3,7 @@ import { query, withTransaction } from '../db.js';
 import { authenticate } from '../middleware/auth.js';
 import { generateRef, isPositiveNumber, toMoney, asyncHandler, sendCsv } from '../utils/helpers.js';
 import { audit, auditTx } from '../lib/audit.js';
+import { postJournal } from '../lib/ledger.js';
 import { notify } from '../lib/notify.js';
 import { settleDueCollections } from '../lib/collections.js';
 import { runDuePlans } from '../lib/plans.js';
@@ -115,6 +116,8 @@ router.post('/deposit', async (req, res) => {
       await auditTx(client, req, 'wallet.deposited', 'user', req.user.id,
         { amount: amt, reference: tx.rows[0].reference },
         { before: { balance: Number(w.rows[0].balance) }, after: { balance: newBalance } });
+      await postJournal(client, req, { type: 'deposit', transactionId: tx.rows[0].id,
+        reference: tx.rows[0].reference, amount: amt, direction: 'in' });
       return { wallet: { ...w.rows[0], balance: newBalance }, transaction: tx.rows[0] };
     });
 
@@ -148,6 +151,8 @@ router.post('/withdraw', async (req, res) => {
       await auditTx(client, req, 'wallet.withdrawn', 'user', req.user.id,
         { amount: amt, reference: tx.rows[0].reference },
         { before: { balance: Number(w.rows[0].balance) }, after: { balance: newBalance } });
+      await postJournal(client, req, { type: 'withdrawal', transactionId: tx.rows[0].id,
+        reference: tx.rows[0].reference, amount: amt, direction: 'out' });
       return { wallet: { ...w.rows[0], balance: newBalance }, transaction: tx.rows[0] };
     });
 
@@ -229,14 +234,20 @@ router.post('/transfer', asyncHandler(async (req, res) => {
     ]);
     await client.query(
       `INSERT INTO transactions (user_id, wallet_id, type, amount, balance_after, reference, description)
-       VALUES ($1,$2,'transfer_out',$3,$4,$5,$6)`,
+       VALUES ($1,$2,'transfer_out',$3,$4,$5,$6) RETURNING *`,
       [req.user.id, from.rows[0].id, amt, fromBalance, ref, `Transfer to ${target.first_name} ${target.last_name}`]
-    );
+    ).then(async (r) => {
+      await postJournal(client, req, { type: 'transfer_out', transactionId: r.rows[0].id,
+        reference: ref, amount: amt, direction: 'out' });
+    });
     await client.query(
       `INSERT INTO transactions (user_id, wallet_id, type, amount, balance_after, reference, description)
-       VALUES ($1,$2,'transfer_in',$3,$4,$5,$6)`,
+       VALUES ($1,$2,'transfer_in',$3,$4,$5,$6) RETURNING *`,
       [target.id, to.rows[0].id, amt, toBalance, `${ref}-IN`, `Transfer from ${req.user.first_name} ${req.user.last_name}`]
-    );
+    ).then(async (r) => {
+      await postJournal(client, req, { type: 'transfer_in', transactionId: r.rows[0].id,
+        reference: `${ref}-IN`, amount: amt, direction: 'in' });
+    });
     await client.query(
       `INSERT INTO notifications (user_id, title, body, link) VALUES ($1,$2,$3,$4)`,
       [target.id, 'Money received', `${req.user.first_name} ${req.user.last_name} sent you ${amt} NGN.`, '/wallet']

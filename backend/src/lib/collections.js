@@ -1,5 +1,6 @@
 import { toMoney, generateRef } from '../utils/helpers.js';
 import { auditTx, systemReq, SYSTEM_CHANNEL } from './audit.js';
+import { postJournal } from './ledger.js';
 
 // Outstanding across financed total + accrued late penalties.
 export const collectionOutstanding = (c) =>
@@ -118,9 +119,13 @@ export async function settleDueCollections(withTransaction, userId) {
         ]);
         await client.query(
           `INSERT INTO transactions (user_id, wallet_id, type, amount, balance_after, reference, description)
-           VALUES ($1,$2,'collection_repayment',$3,$4,$5,$6)`,
+           VALUES ($1,$2,'collection_repayment',$3,$4,$5,$6) RETURNING *`,
           [userId, w.rows[0].id, pay, newBalance, generateRef('CLP'), `Auto-debit: collection #${c.id}`]
-        );
+        ).then(async (t) => {
+          await postJournal(client, systemReq, { type: 'collection_repayment',
+            transactionId: t.rows[0].id, reference: t.rows[0].reference, amount: pay,
+            direction: 'out', channel: SYSTEM_CHANNEL });
+        });
         await allocateCollectionPayment(client, c.id, pay);
 
         const newPaid = toMoney(Number(c.amount_paid) + pay);

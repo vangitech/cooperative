@@ -3,6 +3,7 @@ import { query, withTransaction } from '../db.js';
 import { authenticate } from '../middleware/auth.js';
 import { generateRef, isPositiveNumber, toMoney, asyncHandler } from '../utils/helpers.js';
 import { audit, auditTx } from '../lib/audit.js';
+import { postJournal } from '../lib/ledger.js';
 import {
   ensureSchedules,
   assessPenalties,
@@ -195,6 +196,8 @@ router.post(
           { amount: amt },
           { before: { status: loan.status, amount_paid: Number(loan.amount_paid) },
             after: { status: newStatus, amount_paid: newPaid } });
+        await postJournal(client, req, { type: 'loan_repayment', transactionId: tx.rows[0].id,
+          reference: tx.rows[0].reference, amount: amt, direction: 'out' });
 
         return { transaction: tx.rows[0], amountPaid: newPaid, status: newStatus, balance: newBalance };
       });

@@ -3,6 +3,7 @@ import { query, withTransaction } from '../db.js';
 import { authenticate, requirePerm } from '../middleware/auth.js';
 import { generateRef, isPositiveNumber, toMoney, asyncHandler } from '../utils/helpers.js';
 import { audit, auditTx } from '../lib/audit.js';
+import { postJournal } from '../lib/ledger.js';
 import { notify } from '../lib/notify.js';
 import {
   ensureCollectionSchedules,
@@ -167,6 +168,8 @@ router.post(
           { amount: amt },
           { before: { status: c.status, amount_paid: Number(c.amount_paid), balance: Number(w.rows[0].balance) },
             after: { status: newStatus, amount_paid: newPaid, balance: newBalance } });
+        await postJournal(client, req, { type: 'collection_repayment', transactionId: tx.rows[0].id,
+          reference: tx.rows[0].reference, amount: amt, direction: 'out' });
         return { transaction: tx.rows[0], amountPaid: newPaid, balance: newBalance };
       });
       res.json(result);
@@ -263,9 +266,12 @@ router.patch(
         ]);
         await client.query(
           `INSERT INTO transactions (user_id, wallet_id, type, amount, balance_after, reference, description)
-           VALUES ($1,$2,'collection_down',$3,$4,$5,$6)`,
+           VALUES ($1,$2,'collection_down',$3,$4,$5,$6) RETURNING *`,
           [c.user_id, w.rows[0].id, down, newBalance, generateRef('CLD'), `Down payment: collection #${c.id}`]
-        );
+        ).then(async (t) => {
+          await postJournal(client, req, { type: 'collection_down', transactionId: t.rows[0].id,
+            reference: t.rows[0].reference, amount: down, direction: 'out' });
+        });
         await client.query('UPDATE store_products SET stock = stock - $1 WHERE id = $2', [
           c.quantity, c.product_id,
         ]);

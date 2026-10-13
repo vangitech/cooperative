@@ -28,6 +28,75 @@ regulator-exportable.
 
 ---
 
+# Ledger Todo — Double-Entry Financial Ledger
+
+Goal: transparent, regulator-grade books — a double-entry journal layer under
+the existing wallet ledger. Members see no change; accountants gain real
+financial statements. Own ledger stays the system of record; bank/MFB CBS
+connections are settlement rails, not replacements.
+
+## L1 — Chart of accounts + journals core
+- `accounts` table (code, name, type: asset/liability/income/expense, scoped per provider where needed). Seed: member-wallets control, settlement float (per provider), savings/dividends/fixed payables, interest/penalty/markup/fee income.
+- `journal_entries` (sequential entry no, period YYYY-MM, debit/credit account, amount, currency, source `transaction_id`, status, actor/role/outcome, `org_id`).
+- `postJournal()` helper called inside the same DB transaction as every money movement.
+- In-transaction invariant: legs must sum to zero or the movement aborts.
+- Acceptance: every wallet movement has balanced journal legs; no unbalanced commit possible.
+
+## L2 — Posting templates per movement type
+- Savings, deposit, withdrawal, transfer, loan disbursal (principal vs interest split on repayments), dividends, penalties, store down-payments/repayments, fixed lock/claim/break, refunds, adjustments.
+- Reversals only (linked reversing entries); maker-checker for manual adjustments (officer proposes → admin approves).
+- Period locking (closed months reject backdated posts), year rollover with opening balances.
+- Acceptance: each type posts correct legs; adjustment without approval impossible.
+
+## L3 — Reconciliation engine + suspense
+- Nightly internal check (Σ wallets = control account; Σ debits = Σ credits) and external check (settlement float = provider statement).
+- Mismatches → suspense queue for accountants, never auto-adjusted.
+- Acceptance: drift detected within 24h with an actionable queue.
+
+## L4 — Provider adapters (CBS/MFB/bank connectivity)
+- One adapter interface (`initiate, verify, parseWebhook, fetchStatement`); Flutterwave becomes adapter #1, MFB/CBS adapter #2 on their API docs.
+- One settlement-float account per provider; reserve-first debit, idempotent confirm/refund.
+- Acceptance: new rail plugs in with zero ledger changes.
+
+## L5 — Financial statements in the reports pack
+- Trial balance, P&L, balance sheet (plus existing 7 reports), org/branch slicing.
+- Acceptance: trial balance zeroes; wallet sums match control account at go-live.
+
+## Migration
+- One-time backfill replays existing `transactions` as dated opening entries, then dual-write live. Go-live proof required before switchover.
+
+---
+
+# Dividends Todo — Surplus-Backed, Pro-Rata, Approved
+
+Goal: dividends paid out of real computed surplus, shared fairly by
+contribution, under maker-checker control. Kills the current flaws: unbacked
+declarations, equal-split unfairness, single-actor declare-and-pay, double
+declaration of a period.
+
+## D1 — Guards on the current flow (small, no schema drama)
+- `UNIQUE(period, user_id)` on `dividends`; idempotent declare per period.
+- New `approved` status + approver columns: `proposed → approved → paid`.
+- Accountant proposes, admin approves, batch-pay whole period atomically.
+- Acceptance: same period can't pay twice; no half-paid periods; single actor can't declare-and-pay.
+
+## D2 — Surplus computation + policy cap (needs ledger L1/L2)
+- Surplus(period) = interest + fees + penalties + markup − expenses − provisions, straight from journal income/expense accounts.
+- Enforce: total declared ≤ surplus × payout ratio (e.g. 60% members / 40% statutory + general reserves).
+- Acceptance: over-surplus declaration rejected in code, not convention.
+
+## D3 — Pro-rata engine + shares path
+- Basis per declaration: `savings` (member balance ÷ total savings × pool); keep `equal` as explicit override only.
+- Later: `shares` module for classic share-capital coops.
+- Member-facing projected share for the open period (savings incentive loop).
+- Acceptance: payout matches contribution share to the kobo; projection visible.
+
+## D4 — Lifecycle hygiene
+- Pending/unclaimed follow-up report after X days; reversal path for erroneous declarations (linked entries, never edits).
+- Acceptance: no dividend row sits unexplained; errors correctable with trail.
+
+---
+
 # Appendix — Original Product Feedback (preserved)
 
 # MPCS Project Feedback — Update v1

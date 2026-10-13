@@ -12,6 +12,7 @@ import {
   resolveAccount,
 } from '../lib/flutterwave.js';
 import { audit, auditTx } from '../lib/audit.js';
+import { postJournal } from '../lib/ledger.js';
 import { notify } from '../lib/notify.js';
 import { settleDueCollections } from '../lib/collections.js';
 import { runDuePlans } from '../lib/plans.js';
@@ -66,6 +67,8 @@ async function creditFundIntent(client, intentId, flw, req, channel = 'web') {
   await auditTx(client, req, 'wallet.funded_online', 'payment_intent', intent.id,
     { txRef: intent.tx_ref, amount: amt },
     { before: { balance: Number(w.rows[0].balance) }, after: { balance: newBalance }, channel });
+  await postJournal(client, req, { type: 'deposit', transactionId: tx.rows[0].id,
+    reference: intent.tx_ref, amount: amt, direction: 'in', settlement: '1002', channel });
   return { already: false, transaction: tx.rows[0], balance: newBalance };
 }
 
@@ -97,6 +100,8 @@ async function creditVirtualAccount(client, userId, flw, accountNumber, req, cha
   await auditTx(client, req, 'wallet.funded_account', 'virtual_account', accountNumber,
     { amount: amt },
     { before: { balance: Number(w.rows[0].balance) }, after: { balance: newBalance }, channel });
+  await postJournal(client, req, { type: 'deposit', transactionId: tx.rows[0].id,
+    reference: tx.rows[0].reference, amount: amt, direction: 'in', settlement: '1002', channel });
   return { already: false, transaction: tx.rows[0], balance: newBalance };
 }
 
@@ -117,9 +122,12 @@ async function refundWithdrawIntent(client, intentId, reason, req, channel = 'we
   ]);
   await client.query(
     `INSERT INTO transactions (user_id, wallet_id, type, amount, balance_after, reference, description)
-     VALUES ($1,$2,'refund',$3,$4,$5,$6)`,
+     VALUES ($1,$2,'refund',$3,$4,$5,$6) RETURNING *`,
     [intent.user_id, w.rows[0].id, amt, newBalance, `${intent.tx_ref}-R`, reason || 'Withdrawal refund']
-  );
+  ).then(async (t) => {
+    await postJournal(client, req, { type: 'refund', transactionId: t.rows[0].id,
+      reference: `${intent.tx_ref}-R`, amount: amt, direction: 'in', settlement: '1002', channel });
+  });
   const r = await client.query(
     `UPDATE payment_intents SET status = 'failed', updated_at = NOW() WHERE id = $1 RETURNING *`,
     [intent.id]
@@ -283,9 +291,12 @@ router.post(
         ]);
         await client.query(
           `INSERT INTO transactions (user_id, wallet_id, type, amount, balance_after, reference, description)
-           VALUES ($1,$2,'withdrawal',$3,$4,$5,$6)`,
+           VALUES ($1,$2,'withdrawal',$3,$4,$5,$6) RETURNING *`,
           [req.user.id, w.rows[0].id, amt, newBalance, txRef, `Bank withdrawal to ${accountNumber}`]
-        );
+        ).then(async (t) => {
+          await postJournal(client, req, { type: 'withdrawal', transactionId: t.rows[0].id,
+            reference: txRef, amount: amt, direction: 'out', settlement: '1002' });
+        });
         const r = await client.query(
           `INSERT INTO payment_intents (user_id, wallet_id, kind, tx_ref, amount, currency, meta)
            VALUES ($1,$2,'withdraw',$3,$4,$5,$6) RETURNING *`,

@@ -6,6 +6,7 @@ import { authenticate, requirePerm } from '../middleware/auth.js';
 import { generateRef, toMoney, isPositiveNumber, asyncHandler, sendCsv } from '../utils/helpers.js';
 import { audit, auditTx } from '../lib/audit.js';
 import { nextMemberNo, verifyKyc, validateDocument, ID_TYPES } from '../lib/onboarding.js';
+import { postJournal } from '../lib/ledger.js';
 import { assignVirtualAccount } from '../lib/virtualAccounts.js';
 import { ensureSchedules } from '../lib/loans.js';
 import { notify } from '../lib/notify.js';
@@ -325,9 +326,12 @@ router.patch('/loans/:id', requirePerm('loans.review'), async (req, res) => {
       ]);
       await client.query(
         `INSERT INTO transactions (user_id, wallet_id, type, amount, balance_after, reference, description)
-         VALUES ($1,$2,'loan_disbursement',$3,$4,$5,$6)`,
+         VALUES ($1,$2,'loan_disbursement',$3,$4,$5,$6) RETURNING *`,
         [loan.user_id, w.rows[0].id, loan.amount, newBalance, generateRef('LND'), `Loan #${loan.id} disbursement`]
-      );
+      ).then(async (t) => {
+        await postJournal(client, req, { type: 'loan_disbursement', transactionId: t.rows[0].id,
+          reference: t.rows[0].reference, amount: Number(loan.amount), direction: 'in' });
+      });
       const r = await client.query(
         `UPDATE loans SET status='disbursed', reviewed_by=$1, reviewed_at=NOW(), review_note=$2
          WHERE id=$3 RETURNING *`,
@@ -438,6 +442,8 @@ router.patch('/dividends/:id/pay', requirePerm('dividends.manage'), async (req, 
         { amount: Number(div.amount) },
         { before: { status: 'pending', balance: Number(w.rows[0].balance) },
           after: { status: 'paid', balance: newBalance } });
+      await postJournal(client, req, { type: 'dividend', transactionId: tx.rows[0].id,
+        reference: tx.rows[0].reference, amount: Number(div.amount), direction: 'in' });
       return r.rows[0];
     });
     notify(result.user_id, {
@@ -607,6 +613,8 @@ router.post('/fund', requirePerm('fund'), asyncHandler(async (req, res) => {
     await auditTx(client, req, 'wallet.funded_manual', 'user', target.id,
       { amount: amt, note: note || null },
       { before: { balance: Number(w.rows[0].balance) }, after: { balance: newBalance } });
+    await postJournal(client, req, { type: 'deposit', transactionId: tx.rows[0].id,
+      reference: tx.rows[0].reference, amount: amt, direction: 'in' });
     return { member: `${target.first_name} ${target.last_name}`, transaction: tx.rows[0], balance: newBalance };
   });
 
