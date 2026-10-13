@@ -122,19 +122,19 @@ export default function AdminDashboard() {
                 <AreaChart data={monthly}>
                   <defs>
                     <linearGradient id="savingsGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%"  stopColor="hsl(160 84% 30%)" stopOpacity={0.75} />
-                      <stop offset="95%" stopColor="hsl(160 84% 30%)" stopOpacity={0} />
+                      <stop offset="5%"  stopColor="var(--primary)" stopOpacity={0.75} />
+                      <stop offset="95%" stopColor="var(--primary)" stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                   <XAxis dataKey="month" fontSize={12} tickLine={false} axisLine={false} />
                   <YAxis fontSize={12} tickLine={false} axisLine={false} width={70}
                          tickFormatter={(v) => `₦${(v / 1000).toFixed(0)}k`} />
                   <RTooltip
                     formatter={(v) => formatCurrency(v)}
-                    contentStyle={{ borderRadius: 8, border: '1px solid hsl(var(--border))' }}
+                    contentStyle={{ borderRadius: 8, border: '1px solid var(--border)' }}
                   />
-                  <Area type="monotone" dataKey="total" stroke="hsl(160 84% 30%)"
+                  <Area type="monotone" dataKey="total" stroke="var(--primary)"
                         strokeWidth={2} fill="url(#savingsGrad)" />
                 </AreaChart>
               </ResponsiveContainer>

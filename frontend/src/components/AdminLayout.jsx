@@ -10,7 +10,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import AdminActivityBell from '@/components/AdminActivityBell';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { Breadcrumb } from '@/components/ui/breadcrumb';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { TooltipProvider } from '@/components/ui/tooltip';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
@@ -80,24 +80,19 @@ function SidebarContent({ onNavigate, role }) {
               <span className="truncate">{label}</span>
             </NavLink>
           ))}
+
+          <div className="my-2 border-t border-sidebar-border/60" />
+          <NavLink
+            to="/dashboard"
+            onClick={onNavigate}
+            title="Preview member experience"
+            className="group flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
+            <Home className="h-4 w-4 shrink-0" />
+            <span className="truncate">View as Member</span>
+          </NavLink>
         </nav>
       </ScrollArea>
-
-      {/* Member view link */}
-      <div className="p-3 border-t">
-        <TooltipProvider delayDuration={200}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button asChild variant="outline" className="w-full justify-start" onClick={onNavigate}>
-                <NavLink to="/dashboard">
-                  <Home className="h-4 w-4" /> View as Member
-                </NavLink>
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="right">Preview member experience</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-      </div>
     </div>
   );
 }

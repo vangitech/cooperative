@@ -359,12 +359,12 @@ export default function Wallet() {
                 <AreaChart data={analytics.monthly}>
                   <defs>
                     <linearGradient id="inGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="hsl(160 84% 30%)" stopOpacity={0.7} />
-                      <stop offset="95%" stopColor="hsl(160 84% 30%)" stopOpacity={0} />
+                      <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.7} />
+                      <stop offset="95%" stopColor="var(--primary)" stopOpacity={0} />
                     </linearGradient>
                     <linearGradient id="outGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="hsl(0 84% 60%)" stopOpacity={0.7} />
-                      <stop offset="95%" stopColor="hsl(0 84% 60%)" stopOpacity={0} />
+                      <stop offset="5%" stopColor="var(--destructive)" stopOpacity={0.7} />
+                      <stop offset="95%" stopColor="var(--destructive)" stopOpacity={0} />
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} />
@@ -373,8 +373,8 @@ export default function Wallet() {
                          tickFormatter={(v) => `₦${(v / 1000).toFixed(0)}k`} />
                   <RTooltip formatter={(v) => formatCurrency(v)} />
                   <Legend />
-                  <Area type="monotone" dataKey="inflow" name="In" stroke="hsl(160 84% 30%)" strokeWidth={2} fill="url(#inGrad)" />
-                  <Area type="monotone" dataKey="outflow" name="Out" stroke="hsl(0 84% 60%)" strokeWidth={2} fill="url(#outGrad)" />
+                  <Area type="monotone" dataKey="inflow" name="In" stroke="var(--primary)" strokeWidth={2} fill="url(#inGrad)" />
+                  <Area type="monotone" dataKey="outflow" name="Out" stroke="var(--destructive)" strokeWidth={2} fill="url(#outGrad)" />
                 </AreaChart>
               </ResponsiveContainer>
             ) : (
