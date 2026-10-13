@@ -17,6 +17,7 @@ import virtualAccountRoutes from './routes/virtualAccounts.js';
 import storeRoutes from './routes/store.js';
 import announcementRoutes from './routes/announcements.js';
 import planRoutes from './routes/plans.js';
+import reportsRoutes from './routes/reports.js';
 
 for (const key of ['DATABASE_URL', 'JWT_SECRET']) {
   if (!process.env[key]) {
@@ -47,6 +48,7 @@ app.use('/api/virtual-accounts', virtualAccountRoutes);
 app.use('/api/store', storeRoutes);
 app.use('/api/announcements', announcementRoutes);
 app.use('/api/plans', planRoutes);
+app.use('/api/admin/reports', reportsRoutes);
 
 // 404
 app.use((req, res) => res.status(404).json({ message: 'Route not found' }));

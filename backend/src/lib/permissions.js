@@ -12,6 +12,7 @@ export const ROLE_PERMS = {
     'kyc.review',
     'store.review',
     'announcements.manage',
+    'reports.read',
     'audit.read',
   ],
   accountant: [
@@ -21,6 +22,7 @@ export const ROLE_PERMS = {
     'savings.read',
     'loans.read',
     'dividends.manage',
+    'reports.read',
     'fund',
     'exports',
     'audit.read',

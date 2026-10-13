@@ -130,3 +130,13 @@
     @apply font-sans;
     }
 }
+
+@media print {
+  aside, header {
+    display: none !important;
+  }
+  main > div {
+    max-width: 100% !important;
+    padding: 0 !important;
+  }
+}
