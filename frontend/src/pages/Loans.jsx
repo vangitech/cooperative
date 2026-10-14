@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
 import { formatCurrency, formatDate } from '@/lib/format';
@@ -33,10 +34,22 @@ export default function Loans() {
   const [repay, setRepay] = useState(null);
   const [repayAmount, setRepayAmount] = useState('');
   const [schedule, setSchedule] = useState(null);
+  // Loan pre-conditions (both sectors): recent utility bill + gov ID.
+  // The server re-checks on submit — this banner just explains it upfront.
+  const [docGate, setDocGate] = useState(null);
 
   const load = () => Promise.all([
     api.get('/loans').then(setLoans),
     api.get('/loans/products').then(setProducts).catch(() => setProducts([])),
+    api.get('/kyc/me').then((d) => {
+      const docs = d?.documents || [];
+      const gov = docs.find((x) => ['passport', 'drivers_license', 'voters_card', 'id_card'].includes(x.doc_type));
+      const util = docs
+        .filter((x) => ['utility_bill', 'proof_of_address'].includes(x.doc_type))
+        .sort((a, b) => new Date(b.doc_date || b.created_at) - new Date(a.doc_date || a.created_at))[0] || null;
+      const recent = util ? (Date.now() - new Date(util.doc_date || util.created_at).getTime()) / 86400000 <= 93 : false;
+      setDocGate({ hasGovId: Boolean(gov), hasUtility: Boolean(util), utilityRecent: recent });
+    }).catch(() => setDocGate(null)),
   ]);
   useEffect(() => { load(); }, []);
 
@@ -85,6 +98,17 @@ export default function Loans() {
         <CardHeader><CardTitle>Apply for a Loan</CardTitle></CardHeader>
         <CardContent>
             <form onSubmit={apply} className="space-y-4">
+              {docGate && (!docGate.hasGovId || !docGate.utilityRecent) && (
+                <div className="text-sm bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-200 p-3 rounded-md">
+                  Before applying, upload{' '}
+                  {[
+                    !docGate.utilityRecent && 'a recent utility bill (electricity, water or waste — within 3 months)',
+                    !docGate.hasGovId && 'a valid government ID (passport, driver\u2019s license or voter\u2019s card)',
+                  ].filter(Boolean).join(' and ')}{' '}
+                  under <Link to="/profile?tab=kyc" className="font-semibold underline">Profile → KYC</Link>.
+                  Applications without them are blocked.
+                </div>
+              )}
               {msg && <div className={`text-sm p-3 rounded-md ${msg.type === 'ok' ? 'bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300'}`}>{msg.text}</div>}
               <div>
                 <Label>Loan Product</Label>

@@ -1,4 +1,4 @@
-import { verifyKyc } from './onboarding.js';
+import { verifyKyc, loanDocStatus } from './onboarding.js';
 import { notify } from './notify.js';
 
 // Loan maker-checker helpers. Stage chain:
@@ -77,7 +77,16 @@ export async function runLoanKyc(client, borrowerId) {
       failed: ['KYC profile submitted'],
     };
   }
-  const docs = await client.query('SELECT id FROM kyc_documents WHERE user_id = $1', [borrowerId]);
+  let docs;
+  try {
+    docs = await client.query('SELECT id, doc_type, doc_date, created_at FROM kyc_documents WHERE user_id = $1', [borrowerId]);
+  } catch (e) {
+    if (/column .* does not exist|undefined_column/.test(String(e.message))) {
+      docs = await client.query('SELECT id, doc_type, created_at FROM kyc_documents WHERE user_id = $1', [borrowerId]);
+    } else {
+      throw e;
+    }
+  }
   const g = await client.query('SELECT COUNT(*) FROM guarantors WHERE user_id = $1', [borrowerId]);
   const result = await verifyKyc(client, {
     userId: borrowerId, email: user.email, phone: user.phone,
@@ -85,10 +94,34 @@ export async function runLoanKyc(client, borrowerId) {
     idType: profile.id_type, idNumber: profile.id_number,
     documents: docs.rows,
   });
+  // Loan-time document rule (both sectors): recent utility bill + one valid
+  // government ID. Surfaced as named checks so the officer sees exactly
+  // what is missing; the POST /loans gate already blocks applications.
+  const loanDocs = loanDocStatus(docs.rows);
+  const checks = [
+    ...result.checks,
+    {
+      key: 'utility_bill',
+      label: 'Recent utility bill (electricity / water / waste, ≤ 3 months)',
+      passed: loanDocs.hasUtilityBill && loanDocs.utilityRecent,
+      detail: !loanDocs.hasUtilityBill
+        ? 'none uploaded'
+        : loanDocs.utilityRecent
+          ? `dated ${loanDocs.utilityDate}`
+          : `dated ${loanDocs.utilityDate} — older than 3 months`,
+    },
+    {
+      key: 'gov_id',
+      label: 'Valid government ID (passport / driver\u2019s license / voter\u2019s card)',
+      passed: loanDocs.hasGovId,
+      detail: loanDocs.hasGovId ? loanDocs.govIdType.replaceAll('_', ' ') : 'none uploaded',
+    },
+  ];
   return {
     ...result,
+    checks,
     profile: { status: profile.status, id_type: profile.id_type, guarantors: Number(g.rows[0].count), documents: docs.rows.length },
-    failed: result.checks.filter((c) => !c.passed).map((c) => c.label),
+    failed: checks.filter((c) => !c.passed).map((c) => c.label),
   };
 }
 

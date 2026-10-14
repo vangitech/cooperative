@@ -14,17 +14,36 @@ export const MAX_DOC_BYTES = 5 * 1024 * 1024;
 // Post-signup "additional verification" documents. Identity is already
 // proven at registration (NIN + BVN registry pass); once logged in the
 // member completes proof-of-address / extra ID scans from the dashboard.
-export const KYC_DOC_TYPES = ['id_card', 'utility_bill', 'proof_of_address', 'passport_photo', 'other'];
+// Loan applications additionally require a RECENT utility bill + one valid
+// government ID (passport / driver's licence / PVC) — see loanDocStatus.
+export const KYC_DOC_TYPES = [
+  'id_card', 'utility_bill', 'proof_of_address', 'passport_photo', 'other',
+  'passport', 'drivers_license', 'voters_card',
+];
+
+// One valid government-issued ID: international passport, driver's licence
+// or PVC. Legacy generic `id_card` scans count so existing members are not
+// locked out.
+export const GOV_ID_DOC_TYPES = ['passport', 'drivers_license', 'voters_card', 'id_card'];
+
+// Proof of address: recent utility bill (electricity / water / waste) or
+// equivalent proof of address.
+export const UTILITY_DOC_TYPES = ['utility_bill', 'proof_of_address'];
+
+// A utility bill counts as "recent" when its bill date (or upload date when
+// no bill date was supplied) is within the last ~3 months.
+export const UTILITY_MAX_AGE_DAYS = 93;
 
 // Validate one base64 identity document. Returns { bytes, size } or throws 400.
-export function validateDocument({ docType, filename, mime, data }) {
+export function validateDocument({ docType, filename, mime, data, docDate }) {
   const err = (message) => {
     const e = new Error(message);
     e.status = 400;
     throw e;
   };
   if (!filename || !mime || !data) err('Each document needs filename, mime and data');
-  if (docType && !KYC_DOC_TYPES.includes(docType)) err(`Unknown document type: ${docType}`);
+  const type = docType || 'id_card';
+  if (!KYC_DOC_TYPES.includes(type)) err(`Unknown document type: ${docType}`);
   if (!DOC_MIMES.includes(mime)) err(`Document type not allowed (jpg, png, pdf only): ${filename}`);
   let bytes;
   try {
@@ -34,7 +53,58 @@ export function validateDocument({ docType, filename, mime, data }) {
   }
   if (!bytes.length) err(`Document is empty: ${filename}`);
   if (bytes.length > MAX_DOC_BYTES) err(`Document exceeds 5MB: ${filename}`);
-  return { bytes, size: bytes.length, docType: docType || 'id_card' };
+  // Utility bills must carry their BILL date (not the upload date) so the
+  // "within last 3 months" loan rule can be enforced honestly.
+  let billDate = null;
+  if (UTILITY_DOC_TYPES.includes(type)) {
+    if (!docDate || !/^\d{4}-\d{2}-\d{2}$/.test(String(docDate))) {
+      err('Utility bills need their bill date (YYYY-MM-DD) — pick the date printed on the bill');
+    }
+    billDate = new Date(`${docDate}T00:00:00Z`);
+    if (Number.isNaN(billDate.getTime())) err('Utility bill date is invalid');
+    if (billDate > new Date()) err('Utility bill date cannot be in the future');
+    const ageDays = (Date.now() - billDate.getTime()) / 86400000;
+    if (ageDays > UTILITY_MAX_AGE_DAYS) {
+      err('Utility bill is older than 3 months — upload a recent electricity, water or waste bill');
+    }
+  }
+  return { bytes, size: bytes.length, docType: type, docDate: billDate };
+}
+
+// Loan pre-conditions over a member's uploaded documents (both sectors:
+// private workers and civil servants). Rows carry doc_type + created_at +
+// doc_date. Returns { passed, hasGovId, govIdType, hasUtilityBill,
+// utilityRecent, utilityDate, missing[] } — `missing` holds human-readable
+// instructions for the member.
+export function loanDocStatus(documents = []) {
+  const docs = Array.isArray(documents) ? documents : [];
+  const gov = docs.find((d) => GOV_ID_DOC_TYPES.includes(d.doc_type));
+  const util = docs
+    .filter((d) => UTILITY_DOC_TYPES.includes(d.doc_type))
+    .sort((a, b) => new Date(b.doc_date || b.created_at) - new Date(a.doc_date || a.created_at))[0] || null;
+  let utilityRecent = false;
+  let utilityDate = null;
+  if (util) {
+    utilityDate = util.doc_date ? String(util.doc_date).slice(0, 10) : String(util.created_at).slice(0, 10);
+    const ref = new Date(util.doc_date || util.created_at);
+    utilityRecent = !Number.isNaN(ref.getTime()) && (Date.now() - ref.getTime()) / 86400000 <= UTILITY_MAX_AGE_DAYS;
+  }
+  const missing = [];
+  if (!gov) missing.push('a valid government ID (international passport, driver\u2019s license or voter\u2019s card)');
+  if (!util) {
+    missing.push('a recent utility bill (electricity, water or waste, within the last 3 months)');
+  } else if (!utilityRecent) {
+    missing.push(`a newer utility bill — yours is dated ${utilityDate} (older than 3 months)`);
+  }
+  return {
+    passed: Boolean(gov) && Boolean(util) && utilityRecent,
+    hasGovId: Boolean(gov),
+    govIdType: gov?.doc_type || null,
+    hasUtilityBill: Boolean(util),
+    utilityRecent,
+    utilityDate,
+    missing,
+  };
 }
 
 // Race-safe member number: {ORGCODE}-{YY}-{0001}, sequenced per org + year.

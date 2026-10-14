@@ -1,7 +1,7 @@
 import express from 'express';
 import { query, withTransaction } from '../db.js';
 import { authenticate } from '../middleware/auth.js';
-import { requireVerifiedEmail } from '../middleware/auth.js';
+import { requireVerifiedEmail, requireAdditionalDocs } from '../middleware/auth.js';
 import { asyncHandler, generateRef, isPositiveNumber, toMoney } from '../utils/helpers.js';
 import { getProvider } from '../lib/providers.js';
 import { audit, auditTx } from '../lib/audit.js';
@@ -276,6 +276,7 @@ router.post(
   '/withdraw/initiate',
   authenticate,
   requireVerifiedEmail,
+  requireAdditionalDocs,
   asyncHandler(async (req, res) => {
     const { amount, accountNumber, bankCode, accountName } = req.body;
     if (!isPositiveNumber(amount) || Number(amount) < MIN_AMOUNT)

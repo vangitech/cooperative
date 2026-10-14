@@ -5,6 +5,7 @@ import { generateRef, isPositiveNumber, toMoney, asyncHandler } from '../utils/h
 import { audit, auditTx } from '../lib/audit.js';
 import { postJournal } from '../lib/ledger.js';
 import { borrowerOrg, orgGrantors, usersInRoles, recordReview, notifyMany } from '../lib/loanflow.js';
+import { loanDocStatus } from '../lib/onboarding.js';
 import { notify } from '../lib/notify.js';
 import {
   ensureSchedules,
@@ -85,6 +86,39 @@ router.post(
           return res.status(400).json({
             message: `${product.name} requires ${product.guarantor_count} guarantor(s) — add them under Profile → KYC`,
           });
+      }
+
+      // Additional verification (both sectors — private workers and civil
+      // servants): a RECENT utility bill (electricity / water / waste,
+      // within the last 3 months) + one valid government ID
+      // (international passport, driver's license or voter's card). Upload
+      // under Profile → KYC before applying. Server-enforced so the client
+      // can never bypass it.
+      let loanDocs;
+      try {
+        const d = await query(
+          'SELECT doc_type, doc_date, created_at FROM kyc_documents WHERE user_id = $1',
+          [req.user.id]
+        );
+        loanDocs = loanDocStatus(d.rows);
+      } catch (e) {
+        if (/column .* does not exist|undefined_column/.test(String(e.message))) {
+          const d = await query(
+            'SELECT doc_type, created_at FROM kyc_documents WHERE user_id = $1',
+            [req.user.id]
+          );
+          loanDocs = loanDocStatus(d.rows);
+        } else {
+          throw e;
+        }
+      }
+      if (!loanDocs.passed) {
+        audit(req, 'loan.blocked_missing_docs', 'loan', null,
+          { missing: loanDocs.missing }, { outcome: 'failure' });
+        return res.status(403).json({
+          message: `Upload ${loanDocs.missing.join(' and ')} under Profile → KYC before applying for a loan.`,
+          missing: loanDocs.missing,
+        });
       }
 
       const rate = Number(product.interest_rate);

@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { query } from '../db.js';
 import { hasPerm } from '../lib/permissions.js';
+import { loanDocStatus } from '../lib/onboarding.js';
 import { audit } from '../lib/audit.js';
 
 export async function authenticate(req, res, next) {
@@ -38,6 +39,46 @@ export async function requireVerifiedEmail(req, res, next) {
         { path: req.originalUrl }, { outcome: 'failure' });
       return res.status(403).json({
         message: 'Verify your email before moving money out. Check your inbox for the code or contact support.',
+      });
+    }
+    next();
+  } catch {
+    return res.status(500).json({ message: 'Verification check failed' });
+  }
+}
+
+// Additional verification gates money-out (both sectors — private workers
+// and civil servants): a RECENT utility bill (electricity / water / waste,
+// within the last 3 months) + one valid government ID (international
+// passport, driver's license or voter's card), uploaded under Profile →
+// KYC. Chain after requireVerifiedEmail on withdrawals, transfers and bank
+// payouts. Same posture as the email gate: everyone is checked, blocks are
+// audited as failures.
+export async function requireAdditionalDocs(req, res, next) {
+  try {
+    let rows;
+    try {
+      ({ rows } = await query(
+        'SELECT doc_type, doc_date, created_at FROM kyc_documents WHERE user_id = $1',
+        [req.user.id]
+      ));
+    } catch (e) {
+      if (/column .* does not exist|undefined_column/.test(String(e.message))) {
+        ({ rows } = await query(
+          'SELECT doc_type, created_at FROM kyc_documents WHERE user_id = $1',
+          [req.user.id]
+        ));
+      } else {
+        throw e;
+      }
+    }
+    const status = loanDocStatus(rows);
+    if (!status.passed) {
+      audit(req, 'auth.moneyout_blocked_missing_docs', 'user', req.user.id,
+        { path: req.originalUrl, missing: status.missing }, { outcome: 'failure' });
+      return res.status(403).json({
+        message: `Upload ${status.missing.join(' and ')} under Profile → KYC before moving money out.`,
+        missing: status.missing,
       });
     }
     next();

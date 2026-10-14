@@ -284,7 +284,7 @@ export default function AdminKYC() {
                     <div key={d.id} className="flex items-center justify-between text-sm border rounded-md px-3 py-2 mb-1.5">
                       <div>
                         <p className="font-medium font-mono text-xs">{d.filename}</p>
-                        <p className="text-muted-foreground text-xs">{d.doc_type} · {(d.size_bytes / 1024).toFixed(0)} KB</p>
+                        <p className="text-muted-foreground text-xs">{d.doc_type}{d.doc_date ? ` · dated ${String(d.doc_date).slice(0, 10)}` : ''} · {(d.size_bytes / 1024).toFixed(0)} KB</p>
                       </div>
                       <Button variant="ghost" size="icon" title="Download" onClick={() => downloadDoc(d.id, d.filename)}>
                         <Download className="h-4 w-4" />

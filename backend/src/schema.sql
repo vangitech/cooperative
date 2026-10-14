@@ -438,6 +438,14 @@ CREATE TABLE IF NOT EXISTS kyc_documents (
 );
 CREATE INDEX IF NOT EXISTS idx_docs_user ON kyc_documents(user_id);
 
+-- Loan-gate documents: a recent utility bill (electricity / water / waste,
+-- bill date within the last ~3 months) + one valid government ID
+-- (passport / driver's license / PVC). doc_date holds the BILL or ISSUE
+-- date supplied at upload; the loan application gate falls back to the
+-- upload date when absent.
+ALTER TABLE kyc_documents ADD COLUMN IF NOT EXISTS doc_date DATE;
+CREATE INDEX IF NOT EXISTS idx_docs_user_type ON kyc_documents(user_id, doc_type);
+
 -- Default catch-all organisation for general (unaffiliated) members.
 INSERT INTO organisations (name, code, type, status)
 VALUES ('General Members', 'GEN', 'general', 'active')

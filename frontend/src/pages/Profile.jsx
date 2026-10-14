@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { api } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -19,12 +20,25 @@ const ID_TYPES = [
 const kycVariant = { pending: 'warning', approved: 'success', rejected: 'destructive' };
 
 const DOC_OPTIONS = [
+  { value: 'utility_bill', label: 'Utility bill — electricity / water / waste (within 3 months)' },
+  { value: 'passport', label: 'International Passport' },
+  { value: 'drivers_license', label: "Driver's License" },
+  { value: 'voters_card', label: "Voter's Card (PVC)" },
   { value: 'id_card', label: 'ID card / scan' },
-  { value: 'utility_bill', label: 'Utility bill (proof of address)' },
   { value: 'proof_of_address', label: 'Proof of address (other)' },
   { value: 'passport_photo', label: 'Passport photo' },
   { value: 'other', label: 'Other document' },
 ];
+
+const GOV_ID_TYPES = ['passport', 'drivers_license', 'voters_card', 'id_card'];
+const UTILITY_TYPES = ['utility_bill', 'proof_of_address'];
+const UTILITY_MAX_AGE_DAYS = 93;
+
+function docIsRecent(d) {
+  const ref = new Date(d.doc_date || d.created_at);
+  if (Number.isNaN(ref.getTime())) return false;
+  return (Date.now() - ref.getTime()) / 86400000 <= UTILITY_MAX_AGE_DAYS;
+}
 
 function KycTab() {
   const [data, setData] = useState(null);
@@ -36,6 +50,7 @@ function KycTab() {
   });
   const [g, setG] = useState({ fullName: '', phone: '', email: '', relationship: '' });
   const [docType, setDocType] = useState('utility_bill');
+  const [docDate, setDocDate] = useState('');
   const [msg, setMsg] = useState(null);
 
   const load = () => {
@@ -91,8 +106,12 @@ function KycTab() {
         r.onerror = () => reject(new Error('Could not read file'));
         r.readAsDataURL(f);
       });
-      await api.post('/kyc/documents', { docType, filename: f.name, mime: f.type, data: base64 });
+      await api.post('/kyc/documents', {
+        docType, filename: f.name, mime: f.type, data: base64,
+        docDate: UTILITY_TYPES.includes(docType) ? docDate || undefined : undefined,
+      });
       e.target.value = '';
+      setDocDate('');
       await load();
       setMsg({ type: 'ok', text: 'Document uploaded' });
     } catch (err) { setMsg({ type: 'err', text: err.message }); }
@@ -115,6 +134,15 @@ function KycTab() {
   );
   const ninHolder = vr?.nin?.holder || vr?.identity?.nin?.holder || null;
   const bvnHolder = vr?.bvn?.holder || vr?.identity?.bvn?.holder || null;
+  const ninDob = vr?.nin?.dob || vr?.identity?.nin?.dob || null;
+  const bvnDob = vr?.bvn?.dob || vr?.identity?.bvn?.dob || null;
+  // Loan pre-conditions (both sectors): recent utility bill + gov ID.
+  const govDoc = docs.find((d) => GOV_ID_TYPES.includes(d.doc_type)) || null;
+  const utilityDoc = docs
+    .filter((d) => UTILITY_TYPES.includes(d.doc_type))
+    .sort((a, b) => new Date(b.doc_date || b.created_at) - new Date(a.doc_date || a.created_at))[0] || null;
+  const utilityRecent = utilityDoc ? docIsRecent(utilityDoc) : false;
+  const loanReady = Boolean(govDoc) && utilityRecent;
 
   return (
     <div className="space-y-6 max-w-2xl">
@@ -124,16 +152,38 @@ function KycTab() {
         <div className="flex flex-wrap gap-2">
           {ninPassed && (
             <span className="inline-flex items-center gap-1 rounded-full bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300 px-2.5 py-1 text-xs font-semibold">
-              ✓ NIN PASSED{ninHolder ? ` — ${ninHolder}` : ''}
+              ✓ NIN PASSED{ninHolder ? ` — ${ninHolder}` : ''}{ninDob ? ` · DOB ${ninDob}` : ''}
             </span>
           )}
           {bvnPassed && (
             <span className="inline-flex items-center gap-1 rounded-full bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300 px-2.5 py-1 text-xs font-semibold">
-              ✓ BVN PASSED{bvnHolder ? ` — ${bvnHolder}` : ''}
+              ✓ BVN PASSED{bvnHolder ? ` — ${bvnHolder}` : ''}{bvnDob ? ` · DOB ${bvnDob}` : ''}
             </span>
           )}
         </div>
       )}
+
+      <Card className={loanReady ? 'border-green-500/40' : 'border-amber-500/40'}>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="text-base">Loan eligibility — additional documents</CardTitle>
+              <CardDescription>Upload both items below before you can apply for a loan (private & public sector)</CardDescription>
+            </div>
+            <Badge variant={loanReady ? 'success' : 'warning'}>{loanReady ? 'eligible' : 'incomplete'}</Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="text-sm space-y-1.5">
+          <p className={utilityRecent ? 'text-green-700 dark:text-green-300' : 'text-muted-foreground'}>
+            {utilityRecent ? '✓' : '○'} Recent utility bill (electricity, water or waste — within 3 months)
+            {utilityDoc && <span className="text-muted-foreground"> — {utilityRecent ? `dated ${String(utilityDoc.doc_date || utilityDoc.created_at).slice(0, 10)}` : `dated ${String(utilityDoc.doc_date || utilityDoc.created_at).slice(0, 10)} (too old — upload a newer one)`}</span>}
+          </p>
+          <p className={govDoc ? 'text-green-700 dark:text-green-300' : 'text-muted-foreground'}>
+            {govDoc ? '✓' : '○'} Valid government ID (international passport, driver&rsquo;s license or voter&rsquo;s card)
+            {govDoc && <span className="text-muted-foreground"> — {govDoc.doc_type.replaceAll('_', ' ')}</span>}
+          </p>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -217,14 +267,17 @@ function KycTab() {
       <Card>
         <CardHeader>
           <CardTitle>Identity Documents ({docs.length}/5)</CardTitle>
-          <CardDescription>ID scans, utility bill / proof of address (jpg, png, pdf ≤ 5MB)</CardDescription>
+          <CardDescription>Utility bill (with bill date), government ID — passport / license / PVC (jpg, png, pdf ≤ 5MB)</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           {docs.map((d) => (
             <div key={d.id} className="flex items-center justify-between text-sm border rounded-md px-3 py-2">
               <div>
                 <p className="font-medium font-mono text-xs">{d.filename}</p>
-                <p className="text-muted-foreground text-xs">{(d.size_bytes / 1024).toFixed(0)} KB</p>
+                <p className="text-muted-foreground text-xs">
+                  {(d.size_bytes / 1024).toFixed(0)} KB
+                  {d.doc_date ? ` · dated ${String(d.doc_date).slice(0, 10)}` : ''}
+                </p>
               </div>
               <Badge variant="outline">{d.doc_type.replaceAll('_', ' ')}</Badge>
             </div>
@@ -240,6 +293,15 @@ function KycTab() {
                   {DOC_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
               </div>
+              {UTILITY_TYPES.includes(docType) && (
+                <div>
+                  <Label>Bill date (printed on the bill — within 3 months)</Label>
+                  <Input
+                    type="date" value={docDate} onChange={(e) => setDocDate(e.target.value)}
+                    max={new Date().toISOString().slice(0, 10)}
+                  />
+                </div>
+              )}
               <label className="flex items-center gap-2 rounded-md border border-dashed px-3 py-2.5 text-sm text-muted-foreground cursor-pointer hover:border-primary">
                 Upload {DOC_OPTIONS.find((o) => o.value === docType)?.label.toLowerCase()}…
                 <input type="file" accept=".jpg,.jpeg,.png,.pdf" className="hidden" onChange={uploadDoc} />
@@ -281,6 +343,10 @@ function KycTab() {
 
 export default function Profile() {
   const { user, setUser } = useAuth();
+  const [searchParams] = useSearchParams();
+  const initialTab = ['profile', 'kyc', 'security'].includes(searchParams.get('tab'))
+    ? searchParams.get('tab')
+    : 'profile';
   const [profile, setProfile] = useState({
     firstName: user?.first_name || '',
     lastName: user?.last_name || '',
@@ -309,7 +375,7 @@ export default function Profile() {
   };
 
   return (
-    <Tabs defaultValue="profile" className="max-w-2xl">
+    <Tabs defaultValue={initialTab} key={initialTab} className="max-w-2xl">
       <TabsList>
         <TabsTrigger value="profile">Profile</TabsTrigger>
         <TabsTrigger value="kyc">KYC</TabsTrigger>

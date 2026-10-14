@@ -126,9 +126,10 @@ router.post('/verify-identity', authLimiter, asyncHandler(async (req, res) => {
     id, JSON.stringify(result), it.id,
   ]);
   audit(req, 'register.id_verified', 'registration', it.id, { employmentType: it.employment_type });
-  // Echo the registry holder name so the UI shows WHO the ID belongs to
-  // (and can pre-fill the Details step) instead of a bare "verified".
-  res.json({ verified: true, next: 'bvn', fullName: result.record?.full_name || null });
+  // Echo the registry holder name + date of birth so the UI shows WHO the
+  // ID belongs to (and can pre-fill the Details step) instead of a bare
+  // "verified".
+  res.json({ verified: true, next: 'bvn', fullName: result.record?.full_name || null, dob: result.record?.date_of_birth || null });
 }));
 
 router.post('/verify-bvn', authLimiter, asyncHandler(async (req, res) => {
@@ -179,7 +180,7 @@ router.post('/verify-bvn', authLimiter, asyncHandler(async (req, res) => {
     clean, JSON.stringify(result), it.id,
   ]);
   audit(req, 'register.bvn_verified', 'registration', it.id, { employmentType: it.employment_type });
-  res.json({ verified: true, next: 'email-code', fullName: reg.record?.full_name || null });
+  res.json({ verified: true, next: 'email-code', fullName: reg.record?.full_name || null, dob: reg.record?.date_of_birth || null });
 }));
 
 router.post('/send-code', authLimiter, asyncHandler(async (req, res) => {
@@ -278,6 +279,8 @@ router.post('/complete', authLimiter, async (req, res) => {
     const bvnRes = it.bvn_result || {};
     const ninHolder = idRes.record?.full_name || null;
     const bvnHolder = bvnRes.record?.full_name || null;
+    const ninDob = idRes.record?.date_of_birth || null;
+    const bvnDob = bvnRes.record?.date_of_birth || null;
     const identity = {
       passed: true,
       source: 'registration',
@@ -287,19 +290,19 @@ router.post('/complete', authLimiter, async (req, res) => {
           key: 'nin',
           label: it.employment_type === 'private' ? 'NIN verification' : 'IPPIS check',
           passed: true,
-          detail: ninHolder ? `verified — belongs to ${ninHolder}` : 'verified',
+          detail: ninHolder ? `verified — belongs to ${ninHolder}${ninDob ? ` (DOB ${ninDob})` : ''}` : 'verified',
         },
         {
           key: 'bvn_match',
           label: 'BVN verification',
           passed: true,
           detail: bvnHolder
-            ? `verified — belongs to ${bvnHolder}${bvnRes.crossCheck ? ` (${bvnRes.crossCheck})` : ''}`
+            ? `verified — belongs to ${bvnHolder}${bvnDob ? ` (DOB ${bvnDob})` : ''}${bvnRes.crossCheck ? ` (${bvnRes.crossCheck})` : ''}`
             : 'verified and matched',
         },
       ],
-      nin: { verified: true, holder: ninHolder, detail: idRes.detail || null },
-      bvn: { verified: true, holder: bvnHolder, detail: bvnRes.detail || null },
+      nin: { verified: true, holder: ninHolder, dob: ninDob, detail: idRes.detail || null },
+      bvn: { verified: true, holder: bvnHolder, dob: bvnDob, detail: bvnRes.detail || null },
     };
     const user = await withTransaction(async (client) => {
       const affiliationId = it.org_id || (await client.query(

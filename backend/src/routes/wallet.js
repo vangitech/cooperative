@@ -1,6 +1,6 @@
 import express from 'express';
 import { query, withTransaction } from '../db.js';
-import { authenticate, requireVerifiedEmail } from '../middleware/auth.js';
+import { authenticate, requireVerifiedEmail, requireAdditionalDocs } from '../middleware/auth.js';
 import { generateRef, isPositiveNumber, toMoney, asyncHandler, sendCsv } from '../utils/helpers.js';
 import { audit, auditTx } from '../lib/audit.js';
 import { postJournal } from '../lib/ledger.js';
@@ -176,7 +176,7 @@ router.post('/deposit', async (req, res) => {
   }
 });
 
-router.post('/withdraw', requireVerifiedEmail, async (req, res) => {
+router.post('/withdraw', requireVerifiedEmail, requireAdditionalDocs, async (req, res) => {
   try {
     const { amount, description } = req.body;
     if (!isPositiveNumber(amount)) return res.status(400).json({ message: 'Invalid amount' });
@@ -239,7 +239,7 @@ router.get('/resolve-recipient', asyncHandler(async (req, res) => {
 }));
 
 // Member-to-member transfer (instant, no fee).
-router.post('/transfer', requireVerifiedEmail, asyncHandler(async (req, res) => {
+router.post('/transfer', requireVerifiedEmail, requireAdditionalDocs, asyncHandler(async (req, res) => {
   const { recipient, amount } = req.body;
   if (!recipient) return res.status(400).json({ message: 'Recipient email or account number is required' });
   if (!isPositiveNumber(amount)) return res.status(400).json({ message: 'Invalid amount' });

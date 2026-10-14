@@ -25,6 +25,8 @@ export default function Register() {
   const [bvn, setBvn] = useState('');
   const [idName, setIdName] = useState('');
   const [bvnName, setBvnName] = useState('');
+  const [idDob, setIdDob] = useState('');
+  const [bvnDob, setBvnDob] = useState('');
   const [idPassed, setIdPassed] = useState(false);
   const [bvnPassed, setBvnPassed] = useState(false);
   const [email, setEmail] = useState('');
@@ -68,11 +70,12 @@ export default function Register() {
     const r = await api.post('/auth/register/verify-identity', { sessionToken: session, idNumber });
     const name = r.fullName || '';
     setIdName(name);
+    setIdDob(r.dob || '');
     setIdPassed(true);
     const split = splitName(name);
     if (split) setForm((f) => ({ ...f, firstName: f.firstName || split.firstName, lastName: f.lastName || split.lastName }));
     setInfo(employmentType === 'private'
-      ? name ? `NIN PASSED — verified, it belongs to ${name}.` : 'NIN PASSED — verified against the registry.'
+      ? name ? `NIN PASSED — verified, it belongs to ${name}${r.dob ? ` (DOB ${r.dob})` : ''}.` : 'NIN PASSED — verified against the registry.'
       : 'IPPIS number accepted — PASSED.');
     setStep(2);
   });
@@ -81,10 +84,11 @@ export default function Register() {
     const r = await api.post('/auth/register/verify-bvn', { sessionToken: session, bvn });
     const name = r.fullName || '';
     setBvnName(name);
+    setBvnDob(r.dob || '');
     setBvnPassed(true);
     const split = splitName(name);
     if (split) setForm((f) => ({ ...f, firstName: f.firstName || split.firstName, lastName: f.lastName || split.lastName }));
-    setInfo(name ? `BVN PASSED — verified, it belongs to ${name}.` : 'BVN PASSED — verified and matched.');
+    setInfo(name ? `BVN PASSED — verified, it belongs to ${name}${r.dob ? ` (DOB ${r.dob})` : ''}.` : 'BVN PASSED — verified and matched.');
     setStep(3);
   });
 
@@ -219,7 +223,7 @@ export default function Register() {
                 <div className="flex flex-wrap items-center gap-2 text-sm">
                   {idPassed && (
                     <span className="inline-flex items-center gap-1 rounded-full bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300 px-2.5 py-1 text-xs font-semibold">
-                      <CheckCircle2 className="h-3.5 w-3.5" /> {isPrivate ? 'NIN' : 'IPPIS'} PASSED{idName ? ` — ${idName}` : ''}
+                      <CheckCircle2 className="h-3.5 w-3.5" /> {isPrivate ? 'NIN' : 'IPPIS'} PASSED{idName ? ` — ${idName}` : ''}{idDob ? ` · DOB ${idDob}` : ''}
                     </span>
                   )}
                 </div>
@@ -245,7 +249,7 @@ export default function Register() {
                   )}
                   {bvnPassed && (
                     <span className="inline-flex items-center gap-1 rounded-full bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300 px-2.5 py-1 text-xs font-semibold">
-                      <CheckCircle2 className="h-3.5 w-3.5" /> BVN PASSED{bvnName ? ` — ${bvnName}` : ''}
+                      <CheckCircle2 className="h-3.5 w-3.5" /> BVN PASSED{bvnName ? ` — ${bvnName}` : ''}{bvnDob ? ` · DOB ${bvnDob}` : ''}
                     </span>
                   )}
                 </div>
@@ -288,8 +292,8 @@ export default function Register() {
                 </div>
                 {(idName || bvnName) && (
                   <div className="text-xs rounded-md border p-3 space-y-0.5">
-                    {idName && <p><span className="text-muted-foreground">{isPrivate ? 'NIN' : 'ID'} holder (PASSED):</span> <span className="font-semibold">{idName}</span></p>}
-                    {bvnName && <p><span className="text-muted-foreground">BVN holder (PASSED):</span> <span className="font-semibold">{bvnName}</span></p>}
+                    {idName && <p><span className="text-muted-foreground">{isPrivate ? 'NIN' : 'ID'} holder (PASSED):</span> <span className="font-semibold">{idName}</span>{idDob && <span className="text-muted-foreground"> · DOB {idDob}</span>}</p>}
+                    {bvnName && <p><span className="text-muted-foreground">BVN holder (PASSED):</span> <span className="font-semibold">{bvnName}</span>{bvnDob && <span className="text-muted-foreground"> · DOB {bvnDob}</span>}</p>}
                     <p className="text-muted-foreground">Names below were filled from the registry — correct them if needed. Your account is created active and you are signed in immediately.</p>
                   </div>
                 )}

@@ -115,11 +115,24 @@ router.get(
       'SELECT * FROM guarantors WHERE user_id = $1 ORDER BY created_at',
       [req.user.id]
     );
-    const docs = await query(
-      `SELECT id, doc_type, filename, mime, size_bytes, created_at
-       FROM kyc_documents WHERE user_id = $1 ORDER BY created_at`,
-      [req.user.id]
-    );
+    let docs;
+    try {
+      docs = await query(
+        `SELECT id, doc_type, filename, mime, size_bytes, doc_date, created_at
+         FROM kyc_documents WHERE user_id = $1 ORDER BY created_at`,
+        [req.user.id]
+      );
+    } catch (e) {
+      if (/column .* does not exist|undefined_column/.test(String(e.message))) {
+        docs = await query(
+          `SELECT id, doc_type, filename, mime, size_bytes, created_at
+           FROM kyc_documents WHERE user_id = $1 ORDER BY created_at`,
+          [req.user.id]
+        );
+      } else {
+        throw e;
+      }
+    }
     let p = profile.rows[0] || null;
     if (p && typeof p.verification_result === 'string') {
       try { p = { ...p, verification_result: JSON.parse(p.verification_result) }; } catch { /* keep raw */ }
@@ -162,26 +175,44 @@ router.post(
 /* ---------- Identity document vault (DB-backed, RLS-locked) ---------- */
 
 // Member uploads an ID scan/photo (jpg, png, pdf ≤ 5MB, base64 JSON body).
+// Utility bills (electricity / water / waste) must include their BILL date
+// (docDate YYYY-MM-DD, within the last 3 months) — the loan gate enforces it.
 router.post(
   '/documents',
   authenticate,
   asyncHandler(async (req, res) => {
-    const { docType, filename, mime, data } = req.body || {};
+    const { docType, filename, mime, data, docDate } = req.body || {};
     let file;
     try {
-      file = validateDocument({ docType, filename, mime, data });
+      file = validateDocument({ docType, filename, mime, data, docDate });
     } catch (e) {
       return res.status(e.status || 400).json({ message: e.message });
     }
     const count = await query('SELECT COUNT(*) FROM kyc_documents WHERE user_id = $1', [req.user.id]);
     if (Number(count.rows[0].count) >= 5)
       return res.status(400).json({ message: 'Maximum of 5 documents' });
-    const { rows } = await query(
-      `INSERT INTO kyc_documents (user_id, doc_type, filename, mime, size_bytes, data, uploaded_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
-       RETURNING id, user_id, doc_type, filename, mime, size_bytes, created_at`,
-      [req.user.id, file.docType, filename, mime, file.size, file.bytes, req.user.id]
-    );
+    let rows;
+    try {
+      ({ rows } = await query(
+        `INSERT INTO kyc_documents (user_id, doc_type, filename, mime, size_bytes, data, uploaded_by, doc_date)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         RETURNING id, user_id, doc_type, filename, mime, size_bytes, doc_date, created_at`,
+        [req.user.id, file.docType, filename, mime, file.size, file.bytes, req.user.id,
+         file.docDate ? file.docDate.toISOString().slice(0, 10) : null]
+      ));
+    } catch (e) {
+      // Older DBs without the doc_date column: store without the bill date.
+      if (/column .* does not exist|undefined_column/.test(String(e.message))) {
+        ({ rows } = await query(
+          `INSERT INTO kyc_documents (user_id, doc_type, filename, mime, size_bytes, data, uploaded_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)
+           RETURNING id, user_id, doc_type, filename, mime, size_bytes, created_at`,
+          [req.user.id, file.docType, filename, mime, file.size, file.bytes, req.user.id]
+        ));
+      } else {
+        throw e;
+      }
+    }
     audit(req, 'kyc.document_uploaded', 'kyc', req.user.id, { filename, docType: file.docType });
     res.status(201).json(rows[0]);
   })
@@ -192,11 +223,24 @@ router.get(
   '/documents',
   authenticate,
   asyncHandler(async (req, res) => {
-    const { rows } = await query(
-      `SELECT id, doc_type, filename, mime, size_bytes, created_at
-       FROM kyc_documents WHERE user_id = $1 ORDER BY created_at`,
-      [req.user.id]
-    );
+    let rows;
+    try {
+      ({ rows } = await query(
+        `SELECT id, doc_type, filename, mime, size_bytes, doc_date, created_at
+         FROM kyc_documents WHERE user_id = $1 ORDER BY created_at`,
+        [req.user.id]
+      ));
+    } catch (e) {
+      if (/column .* does not exist|undefined_column/.test(String(e.message))) {
+        ({ rows } = await query(
+          `SELECT id, doc_type, filename, mime, size_bytes, created_at
+           FROM kyc_documents WHERE user_id = $1 ORDER BY created_at`,
+          [req.user.id]
+        ));
+      } else {
+        throw e;
+      }
+    }
     res.json(rows);
   })
 );
@@ -275,11 +319,24 @@ router.get(
     if (!u.rows[0]) return res.status(404).json({ message: 'User not found' });
     const profile = await query('SELECT * FROM kyc_profiles WHERE user_id = $1', [req.params.userId]);
     const guarantors = await query('SELECT * FROM guarantors WHERE user_id = $1 ORDER BY created_at', [req.params.userId]);
-    const docs = await query(
-      `SELECT id, doc_type, filename, mime, size_bytes, created_at
-       FROM kyc_documents WHERE user_id = $1 ORDER BY created_at`,
-      [req.params.userId]
-    );
+    let docs;
+    try {
+      docs = await query(
+        `SELECT id, doc_type, filename, mime, size_bytes, doc_date, created_at
+         FROM kyc_documents WHERE user_id = $1 ORDER BY created_at`,
+        [req.params.userId]
+      );
+    } catch (e) {
+      if (/column .* does not exist|undefined_column/.test(String(e.message))) {
+        docs = await query(
+          `SELECT id, doc_type, filename, mime, size_bytes, created_at
+           FROM kyc_documents WHERE user_id = $1 ORDER BY created_at`,
+          [req.params.userId]
+        );
+      } else {
+        throw e;
+      }
+    }
     let p = profile.rows[0] || null;
     if (p && typeof p.verification_result === 'string') {
       try { p = { ...p, verification_result: JSON.parse(p.verification_result) }; } catch { /* keep raw */ }

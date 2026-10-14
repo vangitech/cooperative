@@ -39,6 +39,10 @@ export default function Wallet() {
   const [months, setMonths] = useState(6);
   const [vaccount, setVaccount] = useState(null);
   const [kycStatus, setKycStatus] = useState(null);
+  // Money-out gate (same rule as loans): withdrawals, transfers and bank
+  // payouts need a recent utility bill + government ID. Server enforces;
+  // this banner explains it upfront.
+  const [docGate, setDocGate] = useState(null);
   const [sendOpen, setSendOpen] = useState(false);
   const [sendId, setSendId] = useState('');
   const [sendAmount, setSendAmount] = useState('');
@@ -78,7 +82,16 @@ export default function Wallet() {
     const [w, t] = await Promise.all([api.get('/wallet'), api.get('/wallet/transactions')]);
     setWallet(w); setTxs(t);
     api.get('/virtual-accounts/me').then(setVaccount).catch(() => setVaccount(null));
-    api.get('/kyc/me').then((d) => setKycStatus(d.profile?.status || null)).catch(() => setKycStatus(null));
+    api.get('/kyc/me').then((d) => {
+      setKycStatus(d.profile?.status || null);
+      const docs = d?.documents || [];
+      const gov = docs.find((x) => ['passport', 'drivers_license', 'voters_card', 'id_card'].includes(x.doc_type));
+      const util = docs
+        .filter((x) => ['utility_bill', 'proof_of_address'].includes(x.doc_type))
+        .sort((a, b) => new Date(b.doc_date || b.created_at) - new Date(a.doc_date || a.created_at))[0] || null;
+      const recent = util ? (Date.now() - new Date(util.doc_date || util.created_at).getTime()) / 86400000 <= 93 : false;
+      setDocGate({ hasGovId: Boolean(gov), hasUtility: Boolean(util), utilityRecent: recent });
+    }).catch(() => { setKycStatus(null); setDocGate(null); });
   };
   useEffect(() => { load(); }, []);
 
@@ -266,6 +279,18 @@ export default function Wallet() {
       {msg && (
         <div className={`text-sm p-3 rounded-md ${msg.type === 'ok' ? 'bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300'}`}>
           {msg.text}
+        </div>
+      )}
+
+      {docGate && (!docGate.hasGovId || !docGate.utilityRecent) && (
+        <div className="text-sm bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-200 p-3 rounded-md">
+          Withdrawals, transfers and bank payouts are locked until you upload{' '}
+          {[
+            !docGate.utilityRecent && 'a recent utility bill (electricity, water or waste — within 3 months)',
+            !docGate.hasGovId && 'a valid government ID (passport, driver\u2019s license or voter\u2019s card)',
+          ].filter(Boolean).join(' and ')}{' '}
+          under <Link to="/profile?tab=kyc" className="font-semibold underline">Profile → KYC</Link>.
+          Deposits, savings and loan repayments still work.
         </div>
       )}
 

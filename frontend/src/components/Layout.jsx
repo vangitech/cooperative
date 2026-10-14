@@ -1,12 +1,13 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
+import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { initials } from '@/lib/format';
 import {
   LayoutDashboard, Wallet, PiggyBank, HandCoins, TrendingUp,
   User, LogOut, ShieldCheck, ShoppingBag, FileText,
-  Menu, PanelLeftClose, PanelLeftOpen,
+  Menu, PanelLeftClose, PanelLeftOpen, BadgeCheck,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -87,6 +88,30 @@ export default function Layout() {
   const [collapsed, setCollapsed] = useState(
     () => localStorage.getItem('mpcs:member:collapsed') === '1',
   );
+  // Additional-verification summary for the avatar menu (both sectors):
+  // NIN/BVN passed at signup + which loan documents are still missing.
+  const [verify, setVerify] = useState(null);
+  useEffect(() => {
+    if (!user) return;
+    api.get('/kyc/me')
+      .then((d) => {
+        let vr = d?.profile?.verification_result || null;
+        if (typeof vr === 'string') {
+          try { vr = JSON.parse(vr); } catch { vr = null; }
+        }
+        const ninPassed = Boolean(
+          vr?.nin?.verified || (vr?.checks || []).some((c) => ['nin', 'reg_nin'].includes(c.key) && c.passed) || d?.profile?.id_number
+        );
+        const bvnPassed = Boolean(
+          vr?.bvn?.verified || (vr?.checks || []).some((c) => ['bvn_match', 'reg_bvn_match'].includes(c.key) && c.passed) || d?.profile?.bvn_verified
+        );
+        const docs = d?.documents || [];
+        const hasGovId = docs.some((x) => ['passport', 'drivers_license', 'voters_card', 'id_card'].includes(x.doc_type));
+        const util = docs.filter((x) => ['utility_bill', 'proof_of_address'].includes(x.doc_type));
+        setVerify({ ninPassed, bvnPassed, hasGovId, hasUtility: util.length > 0 });
+      })
+      .catch(() => setVerify(null));
+  }, [user]);
 
   const isStaff = ['super_admin', 'admin', 'officer', 'accountant', 'grantor'].includes(user?.role);
   const nav = isStaff ? [...memberNav, ...adminBackNav] : memberNav;
@@ -161,16 +186,32 @@ export default function Layout() {
                     </span>
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-56">
+                <DropdownMenuContent align="end" className="w-64">
                   <DropdownMenuLabel>
                     <div className="flex flex-col">
                       <span>{user?.first_name} {user?.last_name}</span>
                       <span className="text-xs font-normal text-muted-foreground">{user?.email}</span>
+                      {verify && (
+                        <span className="mt-1.5 flex flex-wrap gap-1">
+                          {verify.ninPassed && (
+                            <span className="rounded-full bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300 px-1.5 py-px text-[10px] font-semibold">NIN ✓</span>
+                          )}
+                          {verify.bvnPassed && (
+                            <span className="rounded-full bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300 px-1.5 py-px text-[10px] font-semibold">BVN ✓</span>
+                          )}
+                          {(!verify.hasUtility || !verify.hasGovId) && (
+                            <span className="rounded-full bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 px-1.5 py-px text-[10px] font-semibold">docs needed</span>
+                          )}
+                        </span>
+                      )}
                     </div>
                   </DropdownMenuLabel>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={() => navigate('/profile')}>
                     <User className="h-4 w-4" /> Profile
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => navigate('/profile?tab=kyc')}>
+                    <BadgeCheck className="h-4 w-4" /> Additional verification
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => navigate('/statement')}>
                     <FileText className="h-4 w-4" /> Report / Statement
