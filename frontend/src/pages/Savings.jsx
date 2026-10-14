@@ -24,7 +24,7 @@ export default function Savings() {
   const [fds, setFds] = useState([]);
   const [fdForm, setFdForm] = useState({ amount: '', tenureMonths: '' });
   const [plans, setPlans] = useState([]);
-  const [planForm, setPlanForm] = useState({ amount: '', dayOfMonth: '1' });
+  const [planForm, setPlanForm] = useState({ amount: '', frequency: 'monthly', dayOfMonth: '1' });
 
   const load = async () => {
     const [s, l] = await Promise.all([api.get('/savings/summary'), api.get('/savings')]);
@@ -81,10 +81,14 @@ export default function Savings() {
   const createPlan = async (e) => {
     e.preventDefault(); setMsg(null);
     try {
-      await api.post('/plans', { amount: Number(planForm.amount), dayOfMonth: Number(planForm.dayOfMonth) });
-      setPlanForm({ amount: '', dayOfMonth: '1' });
+      await api.post('/plans', {
+        amount: Number(planForm.amount),
+        frequency: planForm.frequency,
+        dayOfMonth: planForm.frequency === 'monthly' ? Number(planForm.dayOfMonth) : undefined,
+      });
+      setPlanForm({ amount: '', frequency: 'monthly', dayOfMonth: '1' });
       await loadPlans();
-      setMsg({ type: 'ok', text: 'Recurring plan created — runs automatically each month.' });
+      setMsg({ type: 'ok', text: `Recurring plan created — debited from your wallet ${planForm.frequency === 'daily' ? 'daily' : planForm.frequency === 'weekly' ? 'weekly' : 'each month'} once funded.` });
     } catch (e) { setMsg({ type: 'err', text: e.message }); }
   };
 
@@ -120,28 +124,41 @@ export default function Savings() {
           )}
           <div className="grid gap-6 lg:grid-cols-3">
             <form onSubmit={createPlan} className="space-y-4">
-              <div><Label>Amount per month</Label><Input type="number" min="1" required value={planForm.amount} onChange={(e) => setPlanForm({ ...planForm, amount: e.target.value })} placeholder="0.00" /></div>
+              <div><Label>Amount per period</Label><Input type="number" min="1" required value={planForm.amount} onChange={(e) => setPlanForm({ ...planForm, amount: e.target.value })} placeholder="0.00" /></div>
               <div>
-                <Label>Debit day</Label>
-                <Select value={String(planForm.dayOfMonth)} onValueChange={(v) => setPlanForm({ ...planForm, dayOfMonth: v })}>
+                <Label>Frequency</Label>
+                <Select value={planForm.frequency} onValueChange={(v) => setPlanForm({ ...planForm, frequency: v })}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {Array.from({ length: 28 }, (_, i) => (
-                      <SelectItem key={i + 1} value={String(i + 1)}>Day {i + 1}</SelectItem>
-                    ))}
+                    <SelectItem value="daily">Daily</SelectItem>
+                    <SelectItem value="weekly">Weekly</SelectItem>
+                    <SelectItem value="monthly">Monthly</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-              <p className="text-xs text-muted-foreground">Debited from your wallet each month when funded. Top up to stay on track.</p>
+              {planForm.frequency === 'monthly' && (
+                <div>
+                  <Label>Debit day</Label>
+                  <Select value={String(planForm.dayOfMonth)} onValueChange={(v) => setPlanForm({ ...planForm, dayOfMonth: v })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {Array.from({ length: 28 }, (_, i) => (
+                        <SelectItem key={i + 1} value={String(i + 1)}>Day {i + 1}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">Debited from your wallet {planForm.frequency === 'daily' ? 'daily' : planForm.frequency === 'weekly' ? 'weekly' : 'each month'} when funded. Top up to stay on track — loans need 2+ months of savings.</p>
               <Button type="submit" className="w-full">Create Plan</Button>
             </form>
             <div className="lg:col-span-2 space-y-3">
               {plans.map((p) => (
                 <div key={p.id} className="flex flex-wrap items-center gap-3 border rounded-md px-3 py-2.5 text-sm">
                   <div className="flex-1 min-w-40">
-                    <p className="font-semibold">{formatCurrency(p.amount)} / month</p>
+                    <p className="font-semibold">{formatCurrency(p.amount)} / {(p.frequency || 'monthly')}</p>
                     <p className="text-muted-foreground text-xs">
-                      Day {p.day_of_month} · next {formatDate(p.next_run)}
+                      {(p.frequency || 'monthly') === 'monthly' ? `Day ${p.day_of_month} · ` : ''}next {formatDate(p.next_run)}
                       {p.last_run && ` · last ${formatDate(p.last_run)}`}
                     </p>
                   </div>

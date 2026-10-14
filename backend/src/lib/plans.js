@@ -3,13 +3,33 @@ import { toMoney, generateRef } from '../utils/helpers.js';
 import { auditTx, systemReq, SYSTEM_CHANNEL } from './audit.js';
 import { postJournal } from './ledger.js';
 
-// Next occurrence of a day-of-month (clamped to month length implicitly
-// by rolling to the 1st when the day already passed this month).
-export function nextRunDate(day) {
-  const now = new Date();
-  const d = new Date(now.getFullYear(), now.getMonth(), Math.min(day, 28));
+// Next occurrence for a cadence. Monthly keeps the day-of-month (clamped
+// to 28); weekly steps 7 days; daily steps 1 day — always strictly future.
+export function nextRunDate(day, frequency = 'monthly', from = new Date()) {
+  const freq = ['daily', 'weekly', 'monthly'].includes(frequency) ? frequency : 'monthly';
+  if (freq === 'daily') {
+    const d = new Date(from);
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().slice(0, 10);
+  }
+  if (freq === 'weekly') {
+    const d = new Date(from);
+    d.setDate(d.getDate() + 7);
+    return d.toISOString().slice(0, 10);
+  }
+  const now = new Date(from);
+  const d = new Date(now.getFullYear(), now.getMonth(), Math.min(Number(day) || 1, 28));
   if (d <= now) d.setMonth(d.getMonth() + 1);
   return d.toISOString().slice(0, 10);
+}
+
+function advanceRun(plan) {
+  const freq = plan.frequency || 'monthly';
+  const next = new Date(plan.next_run);
+  if (freq === 'daily') next.setDate(next.getDate() + 1);
+  else if (freq === 'weekly') next.setDate(next.getDate() + 7);
+  else next.setMonth(next.getMonth() + 1);
+  return next.toISOString().slice(0, 10);
 }
 
 // Execute one plan: wallet → savings deposit. Returns 'paid' | 'skipped'.
@@ -33,18 +53,16 @@ export async function executePlan(client, plan) {
   const tx = await client.query(
     `INSERT INTO transactions (user_id, wallet_id, type, amount, balance_after, reference, description)
      VALUES ($1,$2,'savings_plan',$3,$4,$5,$6) RETURNING *`,
-    [plan.user_id, w.rows[0].id, amt, newBalance, generateRef('SAV'), `Recurring savings (${plan.savings_type})`]
+    [plan.user_id, w.rows[0].id, amt, newBalance, generateRef('SAV'), `Recurring savings (${plan.frequency || plan.savings_type})`]
   );
   await client.query(
     `INSERT INTO savings (user_id, amount, savings_type, note, transaction_id)
      VALUES ($1,$2,$3,$4,$5)`,
     [plan.user_id, amt, plan.savings_type, 'Recurring plan', tx.rows[0].id]
   );
-  const next = new Date(plan.next_run);
-  next.setMonth(next.getMonth() + 1);
   await client.query(
     `UPDATE savings_plans SET last_run = NOW(), next_run = $1 WHERE id = $2`,
-    [next.toISOString().slice(0, 10), plan.id]
+    [advanceRun(plan), plan.id]
   );
   await auditTx(client, systemReq, 'savings.plan_run', 'savings_plan', plan.id,
     { amount: amt },

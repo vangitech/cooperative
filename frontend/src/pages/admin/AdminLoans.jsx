@@ -31,7 +31,7 @@ const variant = {
 };
 
 const STAGE_LABEL = {
-  pending: '1 · Grantor approval',
+  pending: '1 · Union vote (2-of-3)',
   grantor_approved: '2 · Officer KYC check',
   kyc_failed: '2 · KYC failed — retry',
   kyc_verified: '3 · Payment approval',
@@ -78,7 +78,7 @@ export default function AdminLoans() {
   const [pForm, setPForm] = useState({
     name: '', description: '', interestRate: '', penaltyRate: '5',
     minAmount: '', maxAmount: '', minDurationMonths: '1', maxDurationMonths: '12',
-    requiredSavingsMultiple: '0', minMembershipMonths: '0',
+    requiredSavingsMultiple: '0', minMembershipMonths: '0', minSavingsMonths: '2',
     requiresGuarantors: false, guarantorCount: '0',
   });
   const [pOpen, setPOpen] = useState(false);
@@ -200,11 +200,12 @@ export default function AdminLoans() {
         minDurationMonths: num(pForm.minDurationMonths, 1), maxDurationMonths: num(pForm.maxDurationMonths, 12),
         requiredSavingsMultiple: Number(pForm.requiredSavingsMultiple),
         minMembershipMonths: num(pForm.minMembershipMonths),
+        minSavingsMonths: Math.max(1, num(pForm.minSavingsMonths, 2)),
         requiresGuarantors: pForm.requiresGuarantors, guarantorCount: num(pForm.guarantorCount),
       });
       toast.success('Loan product created');
       setPOpen(false);
-      setPForm({ name: '', description: '', interestRate: '', penaltyRate: '5', minAmount: '', maxAmount: '', minDurationMonths: '1', maxDurationMonths: '12', requiredSavingsMultiple: '0', minMembershipMonths: '0', requiresGuarantors: false, guarantorCount: '0' });
+      setPForm({ name: '', description: '', interestRate: '', penaltyRate: '5', minAmount: '', maxAmount: '', minDurationMonths: '1', maxDurationMonths: '12', requiredSavingsMultiple: '0', minMembershipMonths: '0', minSavingsMonths: '2', requiresGuarantors: false, guarantorCount: '0' });
       load();
     } catch (e) { toast.error(e.message); }
   };
@@ -254,7 +255,7 @@ export default function AdminLoans() {
                     <TableCell><p className="font-medium text-sm">{p.name}</p><p className="text-xs text-muted-foreground">{p.description || '—'}</p></TableCell>
                     <TableCell className="text-right">{p.interest_rate}%</TableCell>
                     <TableCell className="text-right hidden md:table-cell text-sm">{formatCurrency(p.min_amount)}{p.max_amount ? ` – ${formatCurrency(p.max_amount)}` : '+'}</TableCell>
-                    <TableCell className="hidden lg:table-cell text-xs text-muted-foreground">{p.min_duration_months}–{p.max_duration_months} mo</TableCell>
+                    <TableCell className="hidden lg:table-cell text-xs text-muted-foreground">{p.min_duration_months}–{p.max_duration_months} mo · {p.min_savings_months ?? 2} mo savings</TableCell>
                     <TableCell><Badge variant={p.status === 'active' ? 'success' : 'outline'} className="capitalize">{p.status}</Badge></TableCell>
                     <TableCell><Button variant="ghost" size="sm" onClick={() => toggleProduct(p)}>{p.status === 'active' ? 'Archive' : 'Activate'}</Button></TableCell>
                   </TableRow>
@@ -274,6 +275,7 @@ export default function AdminLoans() {
             <div><Label>Penalty % (late)</Label><Input type="number" step="0.01" value={pForm.penaltyRate} onChange={(e) => setPForm({ ...pForm, penaltyRate: e.target.value })} /></div>
             <div><Label>Min amount</Label><Input type="number" value={pForm.minAmount} onChange={(e) => setPForm({ ...pForm, minAmount: e.target.value })} /></div>
             <div><Label>Max amount (blank = ∞)</Label><Input type="number" value={pForm.maxAmount} onChange={(e) => setPForm({ ...pForm, maxAmount: e.target.value })} /></div>
+            <div><Label>Savings history (months, 2–3)</Label><Input type="number" min="1" value={pForm.minSavingsMonths} onChange={(e) => setPForm({ ...pForm, minSavingsMonths: e.target.value })} /></div>
             <div className="col-span-2"><DialogFooter><Button type="submit">Create Product</Button></DialogFooter></div>
           </form>
         </DialogContent>
@@ -311,17 +313,35 @@ export default function AdminLoans() {
                   )}
                 </div>
 
-                {/* Stage 1: grantor */}
+                {/* Stage 1: grantor (2-of-3 union vote) */}
                 {L.status === 'pending' && (
                   <div className="rounded-lg border p-3 space-y-2">
-                    <p className="text-sm font-medium flex items-center gap-1.5"><ShieldCheck className="h-4 w-4 text-primary" /> Stage 1 · Grantor decision</p>
-                    {!canGrantor && <p className="text-xs text-muted-foreground">Only a grantor of {L.org_name || 'the member’s organisation'} (or super-admin) can decide.</p>}
+                    <p className="text-sm font-medium flex items-center gap-1.5"><ShieldCheck className="h-4 w-4 text-primary" /> Stage 1 · Union grantor vote (needs 2-of-3)</p>
+                    {!canGrantor && <p className="text-xs text-muted-foreground">Only a seated grantor of {L.org_name || 'the member’s organisation'} (or super-admin override) can vote — one vote each, borrower excluded.</p>}
+                    {(() => {
+                      const seen = new Map();
+                      for (const r of (detail.reviews || [])) {
+                        if (r.stage === 'grantor' && ['approve', 'reject'].includes(r.action) && !seen.has(Number(r.reviewer_id))) {
+                          seen.set(Number(r.reviewer_id), r.action);
+                        }
+                      }
+                      const approvals = [...seen.values()].filter((v) => v === 'approve').length;
+                      const rejections = [...seen.values()].filter((v) => v === 'reject').length;
+                      return (
+                        <p className="text-xs text-muted-foreground">
+                          Votes so far: {approvals} approve · {rejections} reject
+                          {seen.size > 0 && (
+                            <span> ({(detail.reviews || []).filter((r) => r.stage === 'grantor' && ['approve', 'reject'].includes(r.action)).map((r) => `${r.first_name} ${r.last_name}: ${r.action}`).join('; ')})</span>
+                          )}
+                        </p>
+                      );
+                    })()}
                     <div><Label>Note</Label><Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Decision note…" /></div>
                     <div className="flex gap-2">
-                      <Button size="sm" disabled={busy || !canGrantor} onClick={() => call(() => api.patch(`/admin/loans/${L.id}/grantor`, { decision: 'approve', note: note || undefined }), 'Grantor approved — officer notified')}>
+                      <Button size="sm" disabled={busy || !canGrantor} onClick={() => call(() => api.patch(`/admin/loans/${L.id}/grantor`, { decision: 'approve', note: note || undefined }), 'Vote recorded')}>
                         <Check className="h-4 w-4" /> Approve
                       </Button>
-                      <Button size="sm" variant="destructive" disabled={busy || !canGrantor} onClick={() => call(() => api.patch(`/admin/loans/${L.id}/grantor`, { decision: 'reject', note: note || undefined }), 'Grantor rejected')}>
+                      <Button size="sm" variant="destructive" disabled={busy || !canGrantor} onClick={() => call(() => api.patch(`/admin/loans/${L.id}/grantor`, { decision: 'reject', note: note || undefined }), 'Vote recorded')}>
                         <X className="h-4 w-4" /> Reject
                       </Button>
                     </div>

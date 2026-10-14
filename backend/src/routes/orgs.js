@@ -56,6 +56,118 @@ function cleanCode(v) {
   return String(v || '').trim().toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 20);
 }
 
+// Union leadership: every organisation seats 3 grantors (union leaders).
+// Only admin / super_admin may assign — from FULLY REGISTERED members of
+// that union (active + verified identity + address documents on file).
+// list is staff-visible; assign/remove is admin + super-admin only.
+router.get(
+  '/:id/grantors',
+  authenticate,
+  requirePerm('orgs.read'),
+  asyncHandler(async (req, res) => {
+    const org = await query('SELECT id, name, code FROM organisations WHERE id = $1', [req.params.id]);
+    if (!org.rows[0]) return res.status(404).json({ message: 'Organisation not found' });
+    let rows = [];
+    try {
+      ({ rows } = await query(
+        `SELECT g.user_id AS id, u.first_name, u.last_name, u.email, u.phone, u.status,
+                u.member_no, g.assigned_at,
+                a.first_name AS assigned_by_first, a.last_name AS assigned_by_last
+         FROM org_grantors g
+         JOIN users u ON u.id = g.user_id
+         LEFT JOIN users a ON a.id = g.assigned_by
+         WHERE g.org_id = $1 ORDER BY g.assigned_at`,
+        [req.params.id]
+      ));
+    } catch (e) {
+      if (!/relation .* does not exist|undefined_table/.test(String(e.message))) throw e;
+    }
+    res.json({ org: org.rows[0], seats: 3, grantors: rows });
+  })
+);
+
+router.post(
+  '/:id/grantors',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    try {
+      if (!['admin', 'super_admin'].includes(req.user.role))
+        return res.status(403).json({ message: 'Only admins can assign union grantors' });
+      const { userId } = req.body || {};
+      if (!userId) return res.status(400).json({ message: 'userId is required' });
+
+      const org = await query('SELECT id, name FROM organisations WHERE id = $1 AND status = $2', [
+        req.params.id, 'active',
+      ]);
+      if (!org.rows[0]) return res.status(404).json({ message: 'Organisation not found or inactive' });
+
+      // Candidate must be a fully-registered member OF THIS UNION: active,
+      // primary member, verified identity (NIN/BVN snapshot) + address
+      // documents uploaded.
+      const cand = await query(
+        `SELECT u.id, u.first_name, u.last_name, u.email, u.role, u.status,
+                k.id_number, k.bvn_verified,
+                (SELECT COUNT(*) FROM kyc_documents d WHERE d.user_id = u.id) AS docs
+         FROM users u
+         JOIN organisation_members m ON m.user_id = u.id AND m.org_id = $1 AND m.is_primary AND m.status = 'active'
+         LEFT JOIN kyc_profiles k ON k.user_id = u.id
+         WHERE u.id = $2`,
+        [req.params.id, userId]
+      );
+      const c = cand.rows[0];
+      if (!c) return res.status(404).json({ message: 'Member not found in this union' });
+      if (c.status !== 'active') return res.status(400).json({ message: 'Member account is not active' });
+      if (c.role === 'super_admin') return res.status(400).json({ message: 'The super-admin cannot be a union grantor' });
+      const identityOk = Boolean(c.id_number || c.bvn_verified);
+      if (!identityOk || Number(c.docs) === 0) {
+        return res.status(400).json({
+          message: `${c.first_name} ${c.last_name} is not fully registered — verified NIN/BVN plus uploaded documents are required before seating a grantor`,
+        });
+      }
+
+      const seats = await query('SELECT COUNT(*) FROM org_grantors WHERE org_id = $1', [req.params.id]);
+      if (Number(seats.rows[0].count) >= 3)
+        return res.status(409).json({ message: `${org.rows[0].name} already has 3 grantors — remove one first` });
+
+      await query('UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2', ['grantor', userId]);
+      const { rows } = await query(
+        `INSERT INTO org_grantors (org_id, user_id, assigned_by)
+         VALUES ($1,$2,$3) ON CONFLICT (org_id, user_id) DO NOTHING RETURNING *`,
+        [req.params.id, userId, req.user.id]
+      );
+      audit(req, 'org.grantor_assigned', 'organisation', req.params.id,
+        { userId: Number(userId), org: org.rows[0].name });
+      res.status(201).json({ ok: true, seat: rows[0] || null });
+    } catch (e) {
+      if (/relation .* does not exist|undefined_table/.test(String(e.message))) {
+        return res.status(400).json({ message: 'Grantor seats need a migration — run npm run migrate' });
+      }
+      throw e;
+    }
+  })
+);
+
+router.delete(
+  '/:id/grantors/:userId',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    if (!['admin', 'super_admin'].includes(req.user.role))
+      return res.status(403).json({ message: 'Only admins can remove union grantors' });
+    const { rows } = await query(
+      'DELETE FROM org_grantors WHERE org_id = $1 AND user_id = $2 RETURNING *',
+      [req.params.id, req.params.userId]
+    );
+    if (!rows[0]) return res.status(404).json({ message: 'Grantor seat not found' });
+    // Drop the grantor role only if they hold no other union seat.
+    const other = await query('SELECT COUNT(*) FROM org_grantors WHERE user_id = $1', [req.params.userId]);
+    if (Number(other.rows[0].count) === 0) {
+      await query(`UPDATE users SET role = 'member', updated_at = NOW() WHERE id = $1 AND role = 'grantor'`, [req.params.userId]);
+    }
+    audit(req, 'org.grantor_removed', 'organisation', req.params.id, { userId: Number(req.params.userId) });
+    res.json({ ok: true });
+  })
+);
+
 router.post(
   '/',
   authenticate,

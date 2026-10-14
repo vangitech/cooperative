@@ -15,6 +15,7 @@ import { notify } from '../lib/notify.js';
 import {
   borrowerOrg, orgGrantors, usersInRoles, recordReview,
   separationCheck, runLoanKyc, ensureDirectChat, notifyMany,
+  grantorVotes, GRANTOR_QUORUM,
 } from '../lib/loanflow.js';
 import { settleDueCollections } from '../lib/collections.js';
 import { runDuePlans } from '../lib/plans.js';
@@ -517,9 +518,11 @@ router.get('/loans/:id', requirePerm('loans.read'), asyncHandler(async (req, res
   res.json({ loan: { ...loan, kyc_result: kycResult }, kyc: kyc.rows[0] || null, documents: docs.rows, guarantors: guarantors.rows, reviews: reviews.rows });
 }));
 
-// Stage 1 — Grantor approval. Only a grantor of the borrower's org (or a
-// super_admin override) may approve. The account officer then sees the
-// go-ahead and takes the file for KYC re-verification.
+// Stage 1 — Grantor vote (2-of-3 quorum). Each of the borrower's union
+// grantors votes once; 2 approvals move the file (grantor_approved) and 2
+// rejections close it (rejected — quorum unreachable). The borrower can
+// never vote on their own loan. A super_admin override decides immediately.
+// The account officer then takes the go-ahead file for KYC re-verification.
 router.patch('/loans/:id/grantor', requirePerm('loans.grantor_approve'), async (req, res) => {
   try {
     const { decision, note } = req.body || {};
@@ -531,50 +534,79 @@ router.patch('/loans/:id/grantor', requirePerm('loans.grantor_approve'), async (
       const loan = l.rows[0];
       if (!loan) throw new Error('Loan not found');
       if (loan.status !== 'pending') throw new Error(`Loan is already ${loan.status} — grantor stage is closed`);
+      if (Number(loan.user_id) === Number(req.user.id) && req.user.role !== 'super_admin')
+        throw new Error('You cannot vote on your own loan application');
 
       const org = await borrowerOrg(client, loan.user_id);
-      if (req.user.role !== 'super_admin') {
+      const isOverride = req.user.role === 'super_admin';
+      if (!isOverride) {
         if (!org) throw new Error('Borrower has no organisation — super_admin override required');
         const grantors = await orgGrantors(client, org.id);
         if (!grantors.some((g) => Number(g.id) === Number(req.user.id)))
-          throw new Error(`Only a grantor of ${org.name} may approve this loan`);
+          throw new Error(`Only a grantor of ${org.name} may vote on this loan`);
       }
       await separationCheck(client, loan, req.user.id, req.user.role);
 
-      const status = decision === 'approve' ? 'grantor_approved' : 'rejected';
+      // One vote per grantor — the review trail is the ballot box.
+      const prior = await client.query(
+        `SELECT id FROM loan_reviews WHERE loan_id = $1 AND stage = 'grantor' AND reviewer_id = $2
+         AND action IN ('approve','reject') LIMIT 1`,
+        [loan.id, req.user.id]
+      );
+      if (prior.rows[0] && !isOverride) throw new Error('You have already voted on this loan');
+
+      await recordReview(client, req, loan.id, 'grantor', decision, note, { org: org?.code || null, override: isOverride || undefined });
+      const tally = await grantorVotes(client, loan.id);
+
+      let status = 'pending';
+      if (isOverride) {
+        status = decision === 'approve' ? 'grantor_approved' : 'rejected';
+      } else if (tally.approved) {
+        status = 'grantor_approved';
+      } else if (tally.rejected) {
+        status = 'rejected';
+      }
       const r = await client.query(
-        `UPDATE loans SET status=$1, grantor_id=$2, grantor_note=$3, grantor_at=NOW()
+        `UPDATE loans SET status=$1, grantor_id=CASE WHEN $1 IN ('grantor_approved','rejected') THEN $2 ELSE grantor_id END,
+                grantor_note=$3, grantor_at=CASE WHEN $1 IN ('grantor_approved','rejected') THEN NOW() ELSE grantor_at END
          WHERE id=$4 RETURNING *`,
         [status, req.user.id, note || null, loan.id]
       );
-      await recordReview(client, req, loan.id, 'grantor', decision, note, { org: org?.code || null });
       await auditTx(client, req, `loan.grantor_${decision}d`, 'loan', loan.id,
-        { amount: Number(loan.amount), org: org?.code || null, note: note || null },
+        { amount: Number(loan.amount), org: org?.code || null, note: note || null,
+          approvals: tally.approvals, rejections: tally.rejections, override: isOverride || undefined },
         { before: { status: 'pending' }, after: { status } });
-      return { loan: r.rows[0], org };
+      return { loan: r.rows[0], org, tally, decided: status !== 'pending' };
     });
 
-    const { loan, org } = result;
+    const { loan, org, tally, decided } = result;
     if (loan.status === 'grantor_approved') {
       const officers = await query(`SELECT id FROM users WHERE role IN ('officer','admin','super_admin') AND status = 'active'`);
       notifyMany(officers.rows.map((o) => o.id), {
-        title: 'Grantor approved — verify KYC',
-        body: `Loan #${loan.id} (${loan.amount}) under ${org?.name || 'member org'} has grantor go-ahead. Verify documents before pushing to payment.`,
+        title: 'Grantors agreed (2-of-3) — verify KYC',
+        body: `Loan #${loan.id} (${loan.amount}) under ${org?.name || 'member org'} has union go-ahead (${tally.approvals} approvals). Verify documents before pushing to payment.`,
         link: '/admin/loans',
       });
       notify(loan.user_id, {
-        title: 'Grantor approved your loan',
-        body: `Your ${loan.amount} application passed the grantor. An account officer will now verify your documents.`,
+        title: 'Grantors approved your loan',
+        body: `Your ${loan.amount} application passed the union grantors (${tally.approvals}-of-3). An account officer will now verify your documents.`,
+        link: '/loans',
+      });
+    } else if (loan.status === 'rejected') {
+      notify(loan.user_id, {
+        title: 'Loan application update',
+        body: `Your loan application was not approved by the union grantors${note ? `: ${note}` : '. Contact support for details.'}`,
         link: '/loans',
       });
     } else {
+      // Quorum not yet reached — tell the borrower a vote landed.
       notify(loan.user_id, {
-        title: 'Loan application update',
-        body: `Your loan application was not approved by the grantor${note ? `: ${note}` : '. Contact support for details.'}`,
+        title: 'A grantor voted on your loan',
+        body: `Loan #${loan.id}: ${tally.approvals} approval(s), ${tally.rejections} rejection(s) — needs 2 approvals to move forward.`,
         link: '/loans',
       });
     }
-    res.json(loan);
+    res.json({ ...loan, grantor_votes: { approvals: tally.approvals, rejections: tally.rejections, needed: GRANTOR_QUORUM } });
   } catch (e) {
     res.status(400).json({ message: e.message });
   }
@@ -1044,7 +1076,7 @@ router.post('/loan-products', requirePerm('loans.review'), asyncHandler(async (r
   const {
     name, description, interestRate, penaltyRate, minAmount, maxAmount,
     minDurationMonths, maxDurationMonths, requiredSavingsMultiple,
-    minMembershipMonths, requiresGuarantors, guarantorCount,
+    minMembershipMonths, minSavingsMonths, requiresGuarantors, guarantorCount,
   } = req.body;
   if (!name || interestRate === undefined)
     return res.status(400).json({ message: 'Name and interest rate are required' });
@@ -1053,12 +1085,12 @@ router.post('/loan-products', requirePerm('loans.review'), asyncHandler(async (r
       `INSERT INTO loan_products
          (name, description, interest_rate, penalty_rate, min_amount, max_amount,
           min_duration_months, max_duration_months, required_savings_multiple,
-          min_membership_months, requires_guarantors, guarantor_count)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+          min_membership_months, min_savings_months, requires_guarantors, guarantor_count)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
       [
         name, description || null, interestRate, penaltyRate ?? 5, minAmount ?? 0, maxAmount || null,
         minDurationMonths ?? 1, maxDurationMonths ?? 12, requiredSavingsMultiple ?? 0,
-        minMembershipMonths ?? 0, !!requiresGuarantors, guarantorCount ?? 0,
+        minMembershipMonths ?? 0, Math.max(1, Number(minSavingsMonths) || 2), !!requiresGuarantors, guarantorCount ?? 0,
       ]
     );
     audit(req, 'loan_product.created', 'loan_product', rows[0].id, { name }, { after: rows[0] });
@@ -1073,7 +1105,7 @@ router.patch('/loan-products/:id', requirePerm('loans.review'), asyncHandler(asy
   const allowed = [
     'description', 'interest_rate', 'penalty_rate', 'min_amount', 'max_amount',
     'min_duration_months', 'max_duration_months', 'required_savings_multiple',
-    'min_membership_months', 'requires_guarantors', 'guarantor_count', 'status',
+    'min_membership_months', 'min_savings_months', 'requires_guarantors', 'guarantor_count', 'status',
   ];
   const sets = [];
   const params = [];

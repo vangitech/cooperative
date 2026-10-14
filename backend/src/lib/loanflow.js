@@ -7,8 +7,14 @@ import { notify } from './notify.js';
 // Separation of duties: a non-super_admin may act in at most ONE stage per
 // loan. super_admin is exempt (logged as override) so a fresh deployment
 // with a single staffer can still operate.
+//
+// Union rule: every organisation seats 3 grantors (union leaders) and a
+// loan needs 2-of-3 agreement before it moves. Each grantor votes once;
+// the borrower can never vote on their own loan.
 
 export const LOAN_STAGES = ['pending', 'grantor_approved', 'kyc_verified', 'disbursed'];
+export const GRANTOR_SEATS = 3;
+export const GRANTOR_QUORUM = 2;
 
 export async function borrowerOrg(client, userId) {
   const { rows } = await client.query(
@@ -21,6 +27,20 @@ export async function borrowerOrg(client, userId) {
 }
 
 export async function orgGrantors(client, orgId) {
+  // Explicit union-leader seats first (3 per org); legacy fallback is any
+  // active grantor-role member of the org (pre-seats deployments).
+  try {
+    const { rows } = await client.query(
+      `SELECT u.id, u.first_name, u.last_name, u.email
+       FROM org_grantors g JOIN users u ON u.id = g.user_id
+       WHERE g.org_id = $1 AND u.status = 'active'
+       ORDER BY g.assigned_at`,
+      [orgId]
+    );
+    if (rows.length) return rows;
+  } catch (e) {
+    if (!/relation .* does not exist|undefined_table/.test(String(e.message))) throw e;
+  }
   const { rows } = await client.query(
     `SELECT u.id, u.first_name, u.last_name, u.email
      FROM organisation_members m JOIN users u ON u.id = m.user_id
@@ -29,6 +49,78 @@ export async function orgGrantors(client, orgId) {
     [orgId]
   );
   return rows;
+}
+
+// Current 2-of-3 tally for a loan's grantor stage, from the review trail.
+// Returns { approvals, rejections, voters: [ids], approved, rejected }.
+export async function grantorVotes(client, loanId) {
+  const { rows } = await client.query(
+    `SELECT reviewer_id, action FROM loan_reviews
+     WHERE loan_id = $1 AND stage = 'grantor' AND action IN ('approve','reject')`,
+    [loanId]
+  );
+  const seen = new Map();
+  for (const r of rows) {
+    if (!seen.has(Number(r.reviewer_id))) seen.set(Number(r.reviewer_id), r.action);
+  }
+  const votes = [...seen.values()];
+  const approvals = votes.filter((v) => v === 'approve').length;
+  const rejections = votes.filter((v) => v === 'reject').length;
+  return {
+    approvals, rejections, voters: [...seen.keys()],
+    approved: approvals >= GRANTOR_QUORUM,
+    // Quorum unreachable: even all remaining seats voting approve can't
+    // reach 2 (rejections >= seats - quorum + 1 = 2).
+    rejected: rejections > GRANTOR_SEATS - GRANTOR_QUORUM,
+  };
+}
+
+// Loan savings eligibility: the member runs an ACTIVE daily/weekly/monthly
+// plan AND their savings history spans at least minMonths months. Returns
+// { passed, hasActivePlan, historyMonths, missing[] }.
+export async function loanSavingsStatus(client, userId, minMonths = 2) {
+  const need = Math.max(1, Number(minMonths) || 2);
+  let plan;
+  try {
+    plan = await client.query(
+      `SELECT id, frequency FROM savings_plans WHERE user_id = $1 AND status = 'active' LIMIT 1`,
+      [userId]
+    );
+  } catch (e) {
+    if (/column .* does not exist|undefined_column/.test(String(e.message))) {
+      plan = await client.query(
+        `SELECT id FROM savings_plans WHERE user_id = $1 AND status = 'active' LIMIT 1`,
+        [userId]
+      );
+    } else {
+      throw e;
+    }
+  }
+  const hist = await client.query(
+    `SELECT MIN(savings_date) AS first_date, COUNT(*) AS n FROM savings WHERE user_id = $1`,
+    [userId]
+  );
+  const first = hist.rows[0]?.first_date ? new Date(hist.rows[0].first_date) : null;
+  const historyMonths = first && !Number.isNaN(first.getTime())
+    ? (Date.now() - first.getTime()) / 2592000000
+    : 0;
+  const missing = [];
+  if (!plan.rows[0]) missing.push('an active daily, weekly or monthly savings plan (Savings → Recurring Plans)');
+  if (historyMonths < need) {
+    missing.push(
+      first
+        ? `savings history of ${need}+ months (yours started ${first.toISOString().slice(0, 10)})`
+        : `savings history of ${need}+ months (no savings yet — save for ${need} months first)`
+    );
+  }
+  return {
+    passed: Boolean(plan.rows[0]) && historyMonths >= need,
+    hasActivePlan: Boolean(plan.rows[0]),
+    planFrequency: plan.rows[0]?.frequency || null,
+    historyMonths: Math.floor(historyMonths * 10) / 10,
+    requiredMonths: need,
+    missing,
+  };
 }
 
 export async function usersInRoles(client, roles) {

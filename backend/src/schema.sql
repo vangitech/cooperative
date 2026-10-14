@@ -785,3 +785,31 @@ REVOKE ALL ON TABLE public.loan_reviews FROM anon, authenticated;
 -- Mock funding accounts: test-mode numbers issued locally (no rail call),
 -- clearly flagged so they can never be mistaken for live rail accounts.
 ALTER TABLE virtual_accounts ADD COLUMN IF NOT EXISTS is_mock BOOLEAN NOT NULL DEFAULT false;
+
+-- Union leadership: every organisation (e.g. Utako Market and its
+-- Trader / Cloth unions) seats exactly 3 grantors — the union leaders.
+-- Loans need 2-of-3 grantor agreement (see GRANTOR_QUORUM in loanflow.js).
+-- Seats are explicit rows (not just role + membership) so a grantor of one
+-- union is never automatically a grantor of another.
+CREATE TABLE IF NOT EXISTS org_grantors (
+  id SERIAL PRIMARY KEY,
+  org_id INTEGER NOT NULL REFERENCES organisations(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  assigned_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(org_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_org_grantors_org ON org_grantors(org_id);
+ALTER TABLE public.org_grantors ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.org_grantors FROM anon, authenticated;
+
+-- Recurring savings cadence: daily | weekly | monthly (was monthly-only).
+-- The plan debits the wallet on each due run once funds land (runDuePlans
+-- fires opportunistically after wallet funding, plus cron).
+ALTER TABLE savings_plans ADD COLUMN IF NOT EXISTS frequency VARCHAR(20) NOT NULL DEFAULT 'monthly';
+
+-- Loan eligibility: months of savings history required before applying
+-- (2–3 months: member sets a daily/weekly/monthly plan, system deducts
+-- from the wallet, history must span N months). Per-product, default 2.
+ALTER TABLE loan_products ADD COLUMN IF NOT EXISTS min_savings_months INTEGER NOT NULL DEFAULT 2;
+UPDATE loan_products SET min_savings_months = 2 WHERE min_savings_months IS NULL OR min_savings_months < 2;

@@ -8,22 +8,40 @@ import { nextRunDate, runDuePlans } from '../lib/plans.js';
 const router = express.Router();
 router.use(authenticate);
 
-// Create a monthly recurring savings plan (debited from wallet).
+// Create a recurring savings plan (daily / weekly / monthly) — debited
+// from the wallet on each due run, once funds land (top-ups trigger dues).
 router.post(
   '/',
   asyncHandler(async (req, res) => {
-    const { amount, dayOfMonth, savingsType, note } = req.body;
+    const { amount, dayOfMonth, frequency = 'monthly', savingsType, note } = req.body;
     if (!isPositiveNumber(amount)) return res.status(400).json({ message: 'Invalid amount' });
+    const freq = ['daily', 'weekly', 'monthly'].includes(frequency) ? frequency : 'monthly';
     const day = Number(dayOfMonth);
-    if (!day || day < 1 || day > 28)
+    if (freq === 'monthly' && (!day || day < 1 || day > 28))
       return res.status(400).json({ message: 'Day of month must be 1–28' });
 
-    const { rows } = await query(
-      `INSERT INTO savings_plans (user_id, amount, day_of_month, savings_type, note, next_run)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [req.user.id, toMoney(amount), day, savingsType || 'monthly', note || null, nextRunDate(day)]
-    );
-    audit(req, 'savings.plan_created', 'savings_plan', rows[0].id, { amount: Number(rows[0].amount) });
+    let rows;
+    try {
+      ({ rows } = await query(
+        `INSERT INTO savings_plans (user_id, amount, day_of_month, frequency, savings_type, note, next_run)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+        [req.user.id, toMoney(amount), freq === 'monthly' ? day : 1, freq,
+         savingsType || freq, note || null, nextRunDate(freq === 'monthly' ? day : 1, freq)]
+      ));
+    } catch (e) {
+      // Older DBs without the frequency column: monthly-only legacy insert.
+      if (/column .* does not exist|undefined_column/.test(String(e.message))) {
+        if (freq !== 'monthly') return res.status(400).json({ message: 'Daily/weekly plans need a migration — run npm run migrate' });
+        ({ rows } = await query(
+          `INSERT INTO savings_plans (user_id, amount, day_of_month, savings_type, note, next_run)
+           VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+          [req.user.id, toMoney(amount), day, savingsType || 'monthly', note || null, nextRunDate(day)]
+        ));
+      } else {
+        throw e;
+      }
+    }
+    audit(req, 'savings.plan_created', 'savings_plan', rows[0].id, { amount: Number(rows[0].amount), frequency: freq });
     res.status(201).json(rows[0]);
   })
 );

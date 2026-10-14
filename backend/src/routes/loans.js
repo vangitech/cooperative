@@ -4,7 +4,7 @@ import { authenticate } from '../middleware/auth.js';
 import { generateRef, isPositiveNumber, toMoney, asyncHandler } from '../utils/helpers.js';
 import { audit, auditTx } from '../lib/audit.js';
 import { postJournal } from '../lib/ledger.js';
-import { borrowerOrg, orgGrantors, usersInRoles, recordReview, notifyMany } from '../lib/loanflow.js';
+import { borrowerOrg, orgGrantors, usersInRoles, recordReview, notifyMany, grantorVotes, loanSavingsStatus } from '../lib/loanflow.js';
 import { loanDocStatus } from '../lib/onboarding.js';
 import { notify } from '../lib/notify.js';
 import {
@@ -121,6 +121,17 @@ router.post(
         });
       }
 
+      // Savings history: the member runs an active daily/weekly/monthly
+      // plan (auto-debited from the wallet once funded) AND has saved for
+      // at least min_savings_months months (2–3). Server-enforced.
+      const saveStatus = await loanSavingsStatus(pool, req.user.id, product.min_savings_months ?? 2);
+      if (!saveStatus.passed) {
+        return res.status(403).json({
+          message: `Before applying for ${product.name}: ${saveStatus.missing.join('; ')}.`,
+          missing: saveStatus.missing,
+        });
+      }
+
       const rate = Number(product.interest_rate);
       const total = toMoney(amt * (1 + (rate / 100) * (months / 12)));
 
@@ -175,17 +186,31 @@ router.post(
   })
 );
 
-// GET /api/loans — my loans (with live outstanding incl. penalties).
+// GET /api/loans — my loans (with live outstanding incl. penalties + grantor vote tally).
 router.get(
   '/',
   asyncHandler(async (req, res) => {
     const { rows } = await query(
-      `SELECT l.*, p.name AS product_name
+      `SELECT l.*, p.name AS product_name,
+              (SELECT COUNT(*) FROM loan_reviews r WHERE r.loan_id = l.id AND r.stage = 'grantor' AND r.action = 'approve') AS grantor_approvals,
+              (SELECT COUNT(*) FROM loan_reviews r WHERE r.loan_id = l.id AND r.stage = 'grantor' AND r.action = 'reject') AS grantor_rejections
        FROM loans l LEFT JOIN loan_products p ON p.id = l.product_id
        WHERE l.user_id = $1 ORDER BY l.created_at DESC`,
       [req.user.id]
     );
-    res.json(rows.map((l) => ({ ...l, outstanding: loanOutstanding(l) })));
+    const votes = {};
+    for (const l of rows) {
+      try {
+        votes[l.id] = await grantorVotes(pool, l.id);
+      } catch { votes[l.id] = null; }
+    }
+    res.json(rows.map((l) => ({
+      ...l,
+      outstanding: loanOutstanding(l),
+      grantor_votes: votes[l.id]
+        ? { approvals: votes[l.id].approvals, rejections: votes[l.id].rejections }
+        : { approvals: Number(l.grantor_approvals), rejections: Number(l.grantor_rejections) },
+    })));
   })
 );
 

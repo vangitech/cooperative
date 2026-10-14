@@ -16,8 +16,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 const statusVariant = { pending: 'warning', grantor_approved: 'secondary', kyc_failed: 'destructive', kyc_verified: 'default', approved: 'secondary', disbursed: 'default', rejected: 'destructive', repaid: 'success' };
 
 const STAGE_HINT = {
-  pending: 'Awaiting grantor approval',
-  grantor_approved: 'Grantor approved — officer verifying documents',
+  pending: 'Awaiting union grantors (2-of-3 must agree)',
+  grantor_approved: 'Grantors agreed — officer verifying documents',
   kyc_failed: 'Documents need attention — check notifications',
   kyc_verified: 'Verified — awaiting payment approval',
   disbursed: 'Paid out',
@@ -129,6 +129,8 @@ export default function Loans() {
                   {product.min_duration_months}–{product.max_duration_months} mo
                   {Number(product.required_savings_multiple) > 0 && ` · needs ${product.required_savings_multiple}× in savings`}
                   {product.requires_guarantors && ` · ${product.guarantor_count} guarantor(s) required`}
+                  {` · needs an active savings plan + ${product.min_savings_months ?? 2} months of savings history`}
+                  {` · needs 2-of-3 union grantor agreement`}
                 </p>
               )}
               <div><Label>Amount</Label><Input type="number" required value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /></div>
@@ -162,6 +164,11 @@ export default function Loans() {
                   <TableCell className="text-right">{formatCurrency(l.amount_paid)}</TableCell>
                   <TableCell><Badge variant={statusVariant[l.status]} className="capitalize">{String(l.status).replace('_', ' ')}</Badge>
                     {STAGE_HINT[l.status] && <p className="text-[11px] text-muted-foreground mt-0.5">{STAGE_HINT[l.status]}</p>}
+                    {l.status === 'pending' && l.grantor_votes && (
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                        Union votes: {l.grantor_votes.approvals} approve · {l.grantor_votes.rejections} reject (needs 2 approvals)
+                      </p>
+                    )}
                     {l.status === 'repaid' && l.closed_at && (
                       <p className="text-[11px] text-muted-foreground mt-0.5">Closed {formatDate(l.closed_at)}</p>
                     )}
