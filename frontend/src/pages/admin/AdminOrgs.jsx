@@ -14,7 +14,7 @@ import {
   Dialog, DialogContent, DialogFooter,
   DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
-import { Building2, Plus, Users, Crown, UserPlus, UserMinus } from 'lucide-react';
+import { Building2, Plus, Users, Crown, UserPlus, UserMinus, ChevronDown, ChevronRight, ArrowRightLeft } from 'lucide-react';
 
 import { useAuth } from '@/context/AuthContext';
 
@@ -45,6 +45,12 @@ export default function AdminOrgs() {
   const [membersOrg, setMembersOrg] = useState(null);
   const [grantors, setGrantors] = useState(null);
   const [grantorsOrg, setGrantorsOrg] = useState(null);
+  const [expanded, setExpanded] = useState({});
+  const [moveTarget, setMoveTarget] = useState(null); // member row being moved
+  const [moveOrgId, setMoveOrgId] = useState('');
+  const [q, setQ] = useState('');
+
+  const toggle = (id) => setExpanded((e) => ({ ...e, [id]: !(e[id] ?? true) }));
 
   const load = () => api.get('/orgs/all').then(setOrgs).catch((e) => toast.error(e.message));
   useEffect(() => { load(); }, []);
@@ -113,10 +119,99 @@ export default function AdminOrgs() {
     } catch (e) { toast.error(e.message); }
   };
 
+  const submitMove = async () => {
+    if (!moveTarget || !moveOrgId) return;
+    try {
+      const r = await api.patch(`/orgs/members/${moveTarget.id}/move`, { orgId: Number(moveOrgId) });
+      toast.success(`${moveTarget.first_name} moved to ${r.to} — new ID ${r.newMemberNo}${r.grantorSeatReleased ? ' (grantor seat released)' : ''}`);
+      setMoveTarget(null);
+      setMoveOrgId('');
+      viewMembers(membersOrg);
+      load();
+    } catch (e) { toast.error(e.message); }
+  };
+
   const totals = (members || []).reduce(
     (s, m) => ({ balance: s.balance + Number(m.balance), savings: s.savings + Number(m.total_savings) }),
     { balance: 0, savings: 0 }
   );
+
+  // Hierarchy: markets on top, unions nested underneath. Member counts
+  // roll up so a market shows its whole trading community.
+  const childrenOf = {};
+  (orgs || []).forEach((o) => {
+    const k = o.parent_id || 0;
+    (childrenOf[k] = childrenOf[k] || []).push(o);
+  });
+  const rolled = {};
+  const rollup = (o) => {
+    if (rolled[o.id] !== undefined) return rolled[o.id];
+    let s = Number(o.members) || 0;
+    for (const c of childrenOf[o.id] || []) s += rollup(c);
+    rolled[o.id] = s;
+    return s;
+  };
+  (childrenOf[0] || []).forEach(rollup);
+
+  const matchQ = (o) =>
+    !q.trim() || `${o.name} ${o.code} ${o.type} ${o.parent_name || ''}`.toLowerCase().includes(q.toLowerCase());
+
+  const coverage = (o) => {
+    const n = Number(o.grantors || 0);
+    if (n >= 3) return <Badge variant="success">3/3 ready</Badge>;
+    if (n === 2) return <Badge variant="warning" title="Quorum possible but fragile — any rejection stalls loans">2/3 fragile</Badge>;
+    return <Badge variant="destructive" title="Quorum impossible — loans from here stall at the grantor stage">{n}/3 blocked</Badge>;
+  };
+
+  const orgRow = (o, depth) => {
+    const kids = childrenOf[o.id] || [];
+    const open = expanded[o.id] ?? true;
+    return (
+      <TableRow key={o.id}>
+        <TableCell>
+          <div className="flex items-center gap-1" style={{ paddingLeft: depth * 22 }}>
+            {kids.length > 0 && !q.trim() ? (
+              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => toggle(o.id)} title={open ? 'Collapse' : 'Expand'}>
+                {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+              </Button>
+            ) : (
+              <span className="w-6" />
+            )}
+            <div>
+              <p className="font-medium text-sm">{o.name}</p>
+              {o.contact_phone && <p className="text-xs text-muted-foreground">{o.contact_phone}</p>}
+            </div>
+          </div>
+        </TableCell>
+        <TableCell className="font-mono text-xs">{o.code}</TableCell>
+        <TableCell className="text-sm capitalize">{o.type.replaceAll('_', ' ')}</TableCell>
+        <TableCell className="text-right font-medium" title={kids.length ? `Own: ${o.members} · with unions: ${rolled[o.id]}` : undefined}>
+          {kids.length ? rolled[o.id] : o.members}
+        </TableCell>
+        <TableCell>{coverage(o)}</TableCell>
+        <TableCell>
+          <Badge variant={o.status === 'active' ? 'success' : 'outline'} className="capitalize">{o.status}</Badge>
+        </TableCell>
+        <TableCell>
+          <div className="flex gap-1">
+            <Button variant="ghost" size="sm" title="Members" onClick={() => viewMembers(o)}>
+              <Users className="h-4 w-4" />
+            </Button>
+            <Button variant="ghost" size="sm" title="Union grantors (3 seats, 2-of-3 agree on loans)" onClick={() => viewGrantors(o)}>
+              <Crown className="h-4 w-4" />
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => openEdit(o)}>Edit</Button>
+          </div>
+        </TableCell>
+      </TableRow>
+    );
+  };
+
+  const renderOrgRows = (list, depth) => list.filter(matchQ).flatMap((o) => {
+    const open = expanded[o.id] ?? true;
+    const kids = childrenOf[o.id] || [];
+    return open ? [orgRow(o, depth), ...renderOrgRows(kids, depth + 1)] : [orgRow(o, depth)];
+  });
 
   return (
     <div className="w-full space-y-6">
@@ -127,6 +222,9 @@ export default function AdminOrgs() {
               <Building2 className="h-4 w-4 text-primary" /> Organisations
             </span>
             <span className="text-sm text-muted-foreground">{(orgs || []).length} total</span>
+            <div className="relative w-full max-w-xs ml-auto">
+              <Input placeholder="Search markets, unions, codes…" value={q} onChange={(e) => setQ(e.target.value)} />
+            </div>
             <Dialog open={open} onOpenChange={setOpen}>
               <DialogTrigger asChild>
                 <Button size="sm" className="ml-auto" onClick={openCreate}>
@@ -186,11 +284,11 @@ export default function AdminOrgs() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Organisation</TableHead>
+                <TableHead>Organisation (market → unions)</TableHead>
                 <TableHead>Code</TableHead>
                 <TableHead>Type</TableHead>
-                <TableHead className="hidden md:table-cell">Parent</TableHead>
                 <TableHead className="text-right">Members</TableHead>
+                <TableHead>Grantors</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead className="w-32"></TableHead>
               </TableRow>
@@ -202,32 +300,11 @@ export default function AdminOrgs() {
                     <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>
                   ))}</TableRow>
                 ))
-              ) : orgs.map((o) => (
-                <TableRow key={o.id}>
-                  <TableCell>
-                    <p className="font-medium text-sm">{o.name}</p>
-                    {o.contact_phone && <p className="text-xs text-muted-foreground">{o.contact_phone}</p>}
-                  </TableCell>
-                  <TableCell className="font-mono text-xs">{o.code}</TableCell>
-                  <TableCell className="text-sm capitalize">{o.type.replaceAll('_', ' ')}</TableCell>
-                  <TableCell className="hidden md:table-cell text-sm text-muted-foreground">{o.parent_name || '—'}</TableCell>
-                  <TableCell className="text-right font-medium">{o.members}</TableCell>
-                  <TableCell>
-                    <Badge variant={o.status === 'active' ? 'success' : 'outline'} className="capitalize">{o.status}</Badge>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex gap-1">
-                      <Button variant="ghost" size="sm" title="Members" onClick={() => viewMembers(o)}>
-                        <Users className="h-4 w-4" />
-                      </Button>
-                      <Button variant="ghost" size="sm" title="Union grantors (3 seats, 2-of-3 agree on loans)" onClick={() => viewGrantors(o)}>
-                        <Crown className="h-4 w-4" />
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={() => openEdit(o)}>Edit</Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
+              ) : q.trim() ? (
+                (orgs || []).filter(matchQ).map((o) => orgRow(o, 0))
+              ) : (
+                renderOrgRows(childrenOf[0] || [], 0)
+              )}
             </TableBody>
           </Table>
         </CardContent>
@@ -257,7 +334,7 @@ export default function AdminOrgs() {
                     <TableHead className="text-right">Wallet</TableHead>
                     <TableHead className="text-right hidden lg:table-cell">Savings</TableHead>
                     <TableHead>Status</TableHead>
-                    {canSeat && <TableHead className="w-12" title="Seat as grantor"></TableHead>}
+                    {canSeat && <TableHead className="w-24" title="Seat as grantor / move union"></TableHead>}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -274,9 +351,17 @@ export default function AdminOrgs() {
                       <TableCell><Badge variant={m.status === 'active' ? 'success' : 'destructive'} className="capitalize">{m.status}</Badge></TableCell>
                       {canSeat && (
                         <TableCell>
-                          <Button variant="ghost" size="sm" title="Seat as union grantor (must be fully registered)" onClick={() => seatGrantor(m)}>
-                            <UserPlus className="h-4 w-4" />
-                          </Button>
+                          <div className="flex gap-1 items-center">
+                            {m.role && m.role !== 'member' && (
+                              <Badge variant="outline" className="capitalize text-[10px]">{m.role.replace('_', ' ')}</Badge>
+                            )}
+                            <Button variant="ghost" size="sm" title="Seat as union grantor (must be fully registered)" onClick={() => seatGrantor(m)}>
+                              <UserPlus className="h-4 w-4" />
+                            </Button>
+                            <Button variant="ghost" size="sm" title="Move to another union" onClick={() => { setMoveTarget(m); setMoveOrgId(''); }}>
+                              <ArrowRightLeft className="h-4 w-4" />
+                            </Button>
+                          </div>
                         </TableCell>
                       )}
                     </TableRow>
@@ -340,6 +425,35 @@ export default function AdminOrgs() {
           </CardContent>
         </Card>
       )}
+
+      <Dialog open={!!moveTarget} onOpenChange={(v) => { if (!v) setMoveTarget(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Move {moveTarget?.first_name} {moveTarget?.last_name} to another union</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Currently in <span className="font-semibold text-foreground">{membersOrg?.name}</span> ({moveTarget?.member_no}).
+            The new union issues a fresh member ID; wallet, savings, loans and KYC travel untouched.
+            Any grantor seat held here is released automatically.
+          </p>
+          <div>
+            <Label>Destination union</Label>
+            <select
+              className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm"
+              value={moveOrgId} onChange={(e) => setMoveOrgId(e.target.value)}
+            >
+              <option value="">Choose…</option>
+              {(orgs || []).filter((o) => o.id !== membersOrg?.id && o.status === 'active').map((o) => (
+                <option key={o.id} value={o.id}>{o.name} ({o.code})</option>
+              ))}
+            </select>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMoveTarget(null)}>Cancel</Button>
+            <Button disabled={!moveOrgId} onClick={submitMove}>Move member</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

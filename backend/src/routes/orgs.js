@@ -1,9 +1,9 @@
 import express from 'express';
-import { query } from '../db.js';
+import { query, withTransaction } from '../db.js';
 import { authenticate, requirePerm } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/helpers.js';
-import { audit } from '../lib/audit.js';
-import { ORG_TYPES, publicOrgList } from '../lib/onboarding.js';
+import { audit, auditTx } from '../lib/audit.js';
+import { ORG_TYPES, publicOrgList, nextMemberNo } from '../lib/onboarding.js';
 
 const router = express.Router();
 
@@ -12,7 +12,8 @@ router.get('/', asyncHandler(async (req, res) => {
   res.json(await publicOrgList());
 }));
 
-// Staff: full list with member counts (for the admin Organisations page).
+// Staff: full list with member counts + grantor seat coverage (for the
+// admin Organisations page hierarchy and loan-readiness indicators).
 router.get(
   '/all',
   authenticate,
@@ -24,7 +25,17 @@ router.get(
        FROM organisations o LEFT JOIN organisations p ON p.id = o.parent_id
        ORDER BY o.type, o.name`
     );
-    res.json(rows);
+    // Grantor seats per org (missing table = pre-migration DB → zeros).
+    let seats = {};
+    try {
+      const g = await query(
+        `SELECT org_id, COUNT(*) AS n FROM org_grantors GROUP BY org_id`
+      );
+      for (const r of g.rows) seats[r.org_id] = Number(r.n);
+    } catch (e) {
+      if (!/relation .* does not exist|undefined_table/.test(String(e.message))) throw e;
+    }
+    res.json(rows.map((o) => ({ ...o, grantors: seats[o.id] || 0, grantor_seats: 3 })));
   })
 );
 
@@ -37,7 +48,7 @@ router.get(
     // Super-admin is invisible here unless the viewer is a super-admin.
     const hideSuper = req.user.role !== 'super_admin';
     const { rows } = await query(
-      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.status,
+      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.status, u.role,
               m.member_no, m.joined_at, COALESCE(w.balance, 0) AS balance,
               (SELECT COALESCE(SUM(amount),0) FROM savings s WHERE s.user_id = u.id) AS total_savings
        FROM organisation_members m
@@ -165,6 +176,89 @@ router.delete(
     }
     audit(req, 'org.grantor_removed', 'organisation', req.params.id, { userId: Number(req.params.userId) });
     res.json({ ok: true });
+  })
+);
+
+// Move a member between unions (e.g. Trader Union → Cloth Union).
+// Admin / super-admin only. The new union issues a fresh member number
+// (IDs encode affiliation); the old row stays as inactive history.
+// Grantor seats in the OLD union are released automatically (a leader who
+// leaves can't keep voting there); wallet, savings, loans and KYC travel
+// with the user untouched. Loans already in flight keep recorded votes;
+// further votes come from the new union's grantors.
+router.patch(
+  '/members/:userId/move',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    if (!['admin', 'super_admin'].includes(req.user.role))
+      return res.status(403).json({ message: 'Only admins can move members between unions' });
+    const { orgId } = req.body || {};
+    if (!orgId) return res.status(400).json({ message: 'orgId is required' });
+    try {
+      const result = await withTransaction(async (client) => {
+        const target = await client.query(
+          'SELECT id, name, code FROM organisations WHERE id = $1 AND status = $2',
+          [orgId, 'active']
+        );
+        if (!target.rows[0]) throw Object.assign(new Error('Target organisation not found or inactive'), { status: 404 });
+        const cur = await client.query(
+          `SELECT m.*, o.name AS org_name FROM organisation_members m
+           JOIN organisations o ON o.id = m.org_id
+           WHERE m.user_id = $1 AND m.is_primary AND m.status = 'active'`,
+          [req.params.userId]
+        );
+        const current = cur.rows[0];
+        if (!current) throw Object.assign(new Error('Member has no active primary union'), { status: 404 });
+        if (Number(current.org_id) === Number(orgId)) {
+          throw Object.assign(new Error('Member is already in this union'), { status: 409 });
+        }
+        const already = await client.query(
+          'SELECT id FROM organisation_members WHERE user_id = $1 AND org_id = $2',
+          [req.params.userId, orgId]
+        );
+        const memberNo = await nextMemberNo(client, orgId);
+        if (already.rows[0]) {
+          await client.query(
+            `UPDATE organisation_members SET is_primary = true, status = 'active', member_no = $1 WHERE id = $2`,
+            [memberNo, already.rows[0].id]
+          );
+        } else {
+          await client.query(
+            `INSERT INTO organisation_members (user_id, org_id, member_no, is_primary)
+             VALUES ($1,$2,$3,true)`,
+            [req.params.userId, orgId, memberNo]
+          );
+        }
+        await client.query(
+          `UPDATE organisation_members SET is_primary = false, status = 'transferred' WHERE id = $1`,
+          [current.id]
+        );
+        await client.query('UPDATE users SET member_no = $1, updated_at = NOW() WHERE id = $2', [
+          memberNo, req.params.userId,
+        ]);
+        // Release grantor seats in the union they left.
+        const released = await client.query(
+          'DELETE FROM org_grantors WHERE org_id = $1 AND user_id = $2 RETURNING *',
+          [current.org_id, req.params.userId]
+        );
+        const seatsLeft = await client.query('SELECT COUNT(*) FROM org_grantors WHERE user_id = $1', [req.params.userId]);
+        if (released.rows.length && Number(seatsLeft.rows[0].count) === 0) {
+          await client.query(`UPDATE users SET role = 'member', updated_at = NOW() WHERE id = $1 AND role = 'grantor'`, [req.params.userId]);
+        }
+        await auditTx(client, req, 'org.member_moved', 'organisation', orgId,
+          { userId: Number(req.params.userId), from: current.org_name, to: target.rows[0].name,
+            oldMemberNo: current.member_no, newMemberNo: memberNo,
+            grantorSeatReleased: released.rows.length > 0 });
+        return {
+          userId: Number(req.params.userId), from: current.org_name, to: target.rows[0].name,
+          oldMemberNo: current.member_no, newMemberNo: memberNo,
+          grantorSeatReleased: released.rows.length > 0,
+        };
+      });
+      res.json({ ok: true, ...result });
+    } catch (e) {
+      res.status(e.status || 400).json({ message: e.message });
+    }
   })
 );
 
