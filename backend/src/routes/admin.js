@@ -195,7 +195,7 @@ router.post('/users', requirePerm('members.create'), async (req, res) => {
         );
         kycRow = k.rows[0];
         verification = await verifyKyc(client, {
-          userId: user.id, email: user.email, phone: user.phone, dob,
+          userId: user.id, email: user.email, phone: user.phone, firstName, lastName, dob,
           idType, idNumber, documents: files,
         });
         const approved = autoApproveKyc && verification.passed;

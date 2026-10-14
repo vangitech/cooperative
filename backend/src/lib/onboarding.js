@@ -1,4 +1,5 @@
 import { query } from '../db.js';
+import { verifyIdentity, bytidConfigured, bytidMode } from './bytid.js';
 
 export const ORG_TYPES = [
   'general', 'cooperative_branch', 'employer', 'department',
@@ -54,7 +55,7 @@ export async function nextMemberNo(client, orgId) {
 // Deterministic, explainable, no external API needed. Returns
 // { passed, score, checks: [{ key, label, passed, detail }] }.
 // Human approval (officer/admin) stays the final gate.
-export async function verifyKyc(client, { userId, email, phone, dob, idType, idNumber, documents = [] }) {
+export async function verifyKyc(client, { userId, email, phone, firstName, lastName, dob, idType, idNumber, documents = [] }) {
   const checks = [];
   const push = (key, label, passed, detail = null) => checks.push({ key, label, passed, detail });
 
@@ -108,10 +109,38 @@ export async function verifyKyc(client, { userId, email, phone, dob, idType, idN
   const digits = String(phone || '').replace(/\D/g, '');
   push('phone', 'Phone number plausible', digits.length >= 7 && digits.length <= 15, phone || 'missing');
 
+  // 8. Registry check via Bytid (real NIN/BVN/licence/voter lookup when a key
+  // is configured; otherwise skipped and local checks stand alone).
+  // A registry REJECT (not found / mismatch) hard-fails; a provider outage
+  // only flags for human review so downtime never blocks onboarding.
+  let registryHardFail = false;
+  if (['nin', 'bvn', 'drivers_license', 'voters_card'].includes(idType) && idNumber && bytidConfigured()) {
+    const reg = await verifyIdentity({ type: idType, idNumber, firstName, lastName });
+    if (!reg.checked) {
+      push('registry', `Registry lookup (${bytidMode()})`, true, reg.detail);
+    } else if (reg.status === 'verified') {
+      push('registry', `Registry verified (${bytidMode()})`, true,
+        [reg.record?.full_name, reg.detail].filter(Boolean).join(' · '));
+    } else if (reg.status === 'not_found') {
+      registryHardFail = true;
+      push('registry', `Registry verified (${bytidMode()})`, false, 'ID not found in registry');
+    } else if (reg.status === 'mismatch') {
+      registryHardFail = true;
+      push('registry', `Registry verified (${bytidMode()})`, false,
+        `name/DOB mismatch: ${JSON.stringify(reg.fieldMatches)}`);
+    } else {
+      push('registry', `Registry verified (${bytidMode()})`, false,
+        `${reg.detail || reg.code || 'lookup error'} — needs human review`);
+    }
+  } else {
+    push('registry', 'Registry verified', true, bytidConfigured() ? 'type not covered' : 'provider off — local checks only');
+  }
+
   const passedCount = checks.filter((c) => c.passed).length;
   const score = Math.round((passedCount / checks.length) * 100);
-  // Hard fails (identity reuse, bad ID, underage) can never auto-pass.
-  const hardFail = checks.some((c) => ['id_unique', 'id_format', 'age'].includes(c.key) && !c.passed);
+  // Hard fails (identity reuse, bad ID, underage, registry reject) can never auto-pass.
+  const hardFail = registryHardFail ||
+    checks.some((c) => ['id_unique', 'id_format', 'age'].includes(c.key) && !c.passed);
   return { passed: !hardFail && score >= 70, score, checks };
 }
 

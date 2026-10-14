@@ -13,6 +13,7 @@
     "migrate": "node src/migrate.js"
   },
   "dependencies": {
+    "@uverifyng/node": "^0.2.2",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.6",
     "dotenv": "^16.6.1",

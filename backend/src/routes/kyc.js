@@ -59,7 +59,8 @@ router.post(
       const docs = await query('SELECT id FROM kyc_documents WHERE user_id = $1', [req.user.id]);
       const u = await query('SELECT phone FROM users WHERE id = $1', [req.user.id]);
       const verification = await verifyKyc(query, {
-        userId: req.user.id, email: req.user.email, phone: u.rows[0]?.phone, dob,
+        userId: req.user.id, email: req.user.email, phone: u.rows[0]?.phone,
+        firstName: req.user.first_name, lastName: req.user.last_name, dob,
         idType, idNumber, documents: docs.rows,
       });
       await query(
