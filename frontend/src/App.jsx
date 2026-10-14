@@ -33,6 +33,7 @@ const AdminOrgs = lazy(() => import('@/pages/admin/AdminOrgs'));
 const AdminReconcile = lazy(() => import('@/pages/admin/AdminReconcile'));
 const AdminCompliance = lazy(() => import('@/pages/admin/AdminCompliance'));
 const AdminStaff = lazy(() => import('@/pages/admin/AdminStaff'));
+const AdminKYC = lazy(() => import('@/pages/admin/AdminKYC'));
 
 function PageFallback() {
   return (
@@ -73,6 +74,7 @@ export default function App() {
             >
               <Route index element={<AdminDashboard />} />
               <Route path="members" element={<AdminMembers />} />
+              <Route path="kyc" element={<AdminKYC />} />
               <Route path="staff" element={<AdminStaff />} />
               <Route path="loans" element={<AdminLoans />} />
               <Route path="dividends" element={<AdminDividends />} />

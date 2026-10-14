@@ -20,7 +20,7 @@ import {
 import {
   LayoutDashboard, Users, HandCoins, TrendingUp, Receipt,
   Menu, LogOut, User as UserIcon, Shield, Home, Search, ScrollText, Store, Megaphone,
-  PanelLeftClose, PanelLeftOpen, FileText, Building2, Scale, ShieldCheck, Crown,
+  PanelLeftClose, PanelLeftOpen, FileText, Building2, Scale, ShieldCheck, Crown, IdCard,
 } from 'lucide-react';
 
 const ALL_STAFF = ['super_admin', 'admin', 'officer', 'accountant', 'grantor'];
@@ -28,6 +28,7 @@ const ALL_STAFF = ['super_admin', 'admin', 'officer', 'accountant', 'grantor'];
 const adminNav = [
   { to: '/admin',             label: 'Overview',     icon: LayoutDashboard, exact: true, roles: [...ALL_STAFF] },
   { to: '/admin/members',     label: 'Members',      icon: Users, roles: ['super_admin', 'admin', 'officer', 'accountant'] },
+  { to: '/admin/kyc',         label: 'KYC',          icon: IdCard, roles: ['super_admin', 'admin', 'officer'] },
   { to: '/admin/staff',       label: 'Staff',        icon: Crown, roles: ['super_admin'] },
   { to: '/admin/organisations', label: 'Organisations', icon: Building2, roles: ['super_admin', 'admin', 'officer', 'accountant'] },
   { to: '/admin/loans',       label: 'Loans',        icon: HandCoins, roles: [...ALL_STAFF] },
@@ -44,6 +45,7 @@ const adminNav = [
 const routeTitles = {
   '/admin': 'Overview',
   '/admin/members': 'Members',
+  '/admin/kyc': 'KYC',
   '/admin/staff': 'Staff',
   '/admin/organisations': 'Organisations',
   '/admin/loans': 'Loans',

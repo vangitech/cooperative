@@ -15,7 +15,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { MoreHorizontal, Search, UserX, UserCheck, Shield, ShieldOff, Wallet, Landmark, MailCheck } from 'lucide-react';
+import { MoreHorizontal, Search, UserX, UserCheck, Shield, ShieldOff, Wallet, Landmark, MailCheck, Trash2 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import {
   Dialog, DialogContent, DialogFooter,
@@ -36,6 +36,8 @@ export default function AdminMembers() {
   const [assignTarget, setAssignTarget] = useState(null);
   const [assignNin, setAssignNin] = useState('');
   const [assignBvn, setAssignBvn] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const canDelete = ['admin', 'super_admin'].includes(user?.role);
   const [searchParams, setSearchParams] = useSearchParams();
 
   const load = () => api.get('/admin/users').then(setUsers).catch((e) => toast.error(e.message));
@@ -92,6 +94,16 @@ export default function AdminMembers() {
     try {
       await api.patch(`/admin/users/${u.id}/verify-email`);
       toast.success(`${u.email} marked verified`);
+      load();
+    } catch (e) { toast.error(e.message); }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    try {
+      await api.del(`/admin/users/${deleteTarget.id}`);
+      toast.success(`${deleteTarget.email} deleted`);
+      setDeleteTarget(null);
       load();
     } catch (e) { toast.error(e.message); }
   };
@@ -287,6 +299,12 @@ export default function AdminMembers() {
                           <MailCheck className="h-4 w-4" /> Mark email verified
                         </DropdownMenuItem>
                       )}
+                      {canDelete && (
+                        <DropdownMenuItem className="text-destructive focus:text-destructive"
+                                          onClick={() => setDeleteTarget(u)}>
+                          <Trash2 className="h-4 w-4" /> Delete member
+                        </DropdownMenuItem>
+                      )}
                       <DropdownMenuItem onClick={() => { setFundTarget(u); setFundAmount(''); setFundNote(''); }}>
                         <Wallet className="h-4 w-4" /> Fund Wallet
                       </DropdownMenuItem>
@@ -328,6 +346,23 @@ export default function AdminMembers() {
           <div><Label>NIN (11 digits, optional)</Label><Input inputMode="numeric" maxLength={11} value={assignNin} onChange={(e) => setAssignNin(e.target.value.replace(/\D/g, ''))} /></div>
           <div><Label>BVN (11 digits, optional)</Label><Input inputMode="numeric" maxLength={11} value={assignBvn} onChange={(e) => setAssignBvn(e.target.value.replace(/\D/g, ''))} /></div>
           <DialogFooter><Button onClick={submitAssign}>Assign Account</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!deleteTarget} onOpenChange={(v) => { if (!v) setDeleteTarget(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Trash2 className="h-5 w-5 text-destructive" /> Delete member?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            This permanently removes <span className="font-semibold text-foreground">{deleteTarget?.first_name} {deleteTarget?.last_name} ({deleteTarget?.email})</span> —
+            wallet, KYC, documents and membership included. Only accounts with <span className="font-semibold">zero financial history</span> can
+            be deleted (anyone who moved money is blocked — suspend them instead). This is audited and cannot be undone.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={confirmDelete}>Delete permanently</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </>

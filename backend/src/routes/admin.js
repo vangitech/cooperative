@@ -120,6 +120,54 @@ router.patch('/users/:id/role', requirePerm('staff.manage'), asyncHandler(async 
   res.json(rows[0]);
 }));
 
+// Delete a member (admin console). Deliberately narrow: only accounts with
+// ZERO financial footprint (no transactions, savings, loans, dividends,
+// fixed deposits, collections or payment intents) can be removed — this is
+// for bogus/duplicate pending registrations, never for anyone who moved
+// money. The row cascades (wallet, KYC, documents, membership, notices);
+// the audit entry is written first and survives (actor SET NULL on delete).
+router.delete('/users/:id', requirePerm('members.review'), async (req, res) => {
+  if (!['admin', 'super_admin'].includes(req.user.role))
+    return res.status(403).json({ message: 'Only admins can delete members' });
+  if (String(req.params.id) === String(req.user.id))
+    return res.status(400).json({ message: 'You cannot delete your own account' });
+  try {
+    const result = await withTransaction(async (client) => {
+      const t = await client.query('SELECT id, email, role, status FROM users WHERE id = $1', [req.params.id]);
+      const target = t.rows[0];
+      if (!target) throw Object.assign(new Error('User not found'), { status: 404 });
+      if (target.role === 'super_admin') {
+        const supers = await client.query(
+          `SELECT COUNT(*) FROM users WHERE role = 'super_admin' AND status = 'active' AND id <> $1`,
+          [target.id]
+        );
+        if (Number(supers.rows[0].count) === 0) throw new Error('Cannot delete the last active super-admin');
+      }
+      const footprint = await client.query(
+        `SELECT (SELECT COUNT(*) FROM transactions WHERE user_id = $1)
+          + (SELECT COUNT(*) FROM savings WHERE user_id = $1)
+          + (SELECT COUNT(*) FROM loans WHERE user_id = $1)
+          + (SELECT COUNT(*) FROM dividends WHERE user_id = $1)
+          + (SELECT COUNT(*) FROM fixed_deposits WHERE user_id = $1)
+          + (SELECT COUNT(*) FROM collections WHERE user_id = $1)
+          + (SELECT COUNT(*) FROM payment_intents WHERE user_id = $1) AS n`,
+        [target.id]
+      );
+      if (Number(footprint.rows[0].n) > 0) {
+        const err = new Error('This member has financial history and cannot be deleted — suspend instead');
+        err.status = 409;
+        throw err;
+      }
+      await auditTx(client, req, 'member.deleted', 'user', target.id,
+        { email: target.email, role: target.role, status: target.status });
+      await client.query('DELETE FROM users WHERE id = $1', [target.id]);
+      return { id: target.id, email: target.email };
+    });
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    res.status(e.status || 400).json({ message: e.message });
+  }
+});
 // R3: mark a member's email verified (staff check the inbox/code with the
 // member, or confirm a staff-created account's address). Super-admins and
 // member-reviewers only; every grant is audited.

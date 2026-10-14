@@ -177,7 +177,75 @@ router.get(
   })
 );
 
-/* ---------- Admin review ---------- */
+/* ---------- Staff review queue (KYC console) ---------- */
+
+// Enriched queue: every KYC profile with the member, their group
+// (organisation), document/guarantor counts and verification score.
+router.get(
+  '/queue',
+  authenticate,
+  requirePerm('kyc.review'),
+  asyncHandler(async (req, res) => {
+    const { status } = req.query;
+    const params = [];
+    let where = '';
+    if (status && ['pending', 'approved', 'rejected'].includes(status)) {
+      where = 'WHERE k.status = $1';
+      params.push(status);
+    }
+    const { rows } = await query(
+      `SELECT k.*, u.first_name, u.last_name, u.email, u.phone, u.status AS member_status,
+              u.member_no, u.employment_type, u.email_verified, u.created_at AS registered_at,
+              o.name AS org_name, o.code AS org_code, o.type AS org_type,
+              (SELECT COUNT(*) FROM kyc_documents d WHERE d.user_id = u.id) AS doc_count,
+              (SELECT COUNT(*) FROM guarantors g WHERE g.user_id = u.id) AS guarantor_count
+       FROM kyc_profiles k JOIN users u ON u.id = k.user_id
+       LEFT JOIN organisation_members m ON m.user_id = u.id AND m.is_primary AND m.status = 'active'
+       LEFT JOIN organisations o ON o.id = m.org_id
+       ${where} ORDER BY k.updated_at DESC LIMIT 200`,
+      params
+    );
+    res.json(rows.map((r) => {
+      let vr = r.verification_result;
+      if (typeof vr === 'string') {
+        try { vr = JSON.parse(vr); } catch { vr = null; }
+      }
+      return { ...r, verification_result: vr };
+    }));
+  })
+);
+
+// Full member file: everything they submitted + their group.
+router.get(
+  '/user/:userId',
+  authenticate,
+  requirePerm('kyc.review'),
+  asyncHandler(async (req, res) => {
+    const u = await query(
+      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.address, u.role,
+              u.status, u.member_no, u.employment_type, u.email_verified, u.created_at,
+              o.id AS org_id, o.name AS org_name, o.code AS org_code, o.type AS org_type
+       FROM users u
+       LEFT JOIN organisation_members m ON m.user_id = u.id AND m.is_primary AND m.status = 'active'
+       LEFT JOIN organisations o ON o.id = m.org_id
+       WHERE u.id = $1`,
+      [req.params.userId]
+    );
+    if (!u.rows[0]) return res.status(404).json({ message: 'User not found' });
+    const profile = await query('SELECT * FROM kyc_profiles WHERE user_id = $1', [req.params.userId]);
+    const guarantors = await query('SELECT * FROM guarantors WHERE user_id = $1 ORDER BY created_at', [req.params.userId]);
+    const docs = await query(
+      `SELECT id, doc_type, filename, mime, size_bytes, created_at
+       FROM kyc_documents WHERE user_id = $1 ORDER BY created_at`,
+      [req.params.userId]
+    );
+    let p = profile.rows[0] || null;
+    if (p && typeof p.verification_result === 'string') {
+      try { p = { ...p, verification_result: JSON.parse(p.verification_result) }; } catch { /* keep raw */ }
+    }
+    res.json({ user: u.rows[0], profile: p, guarantors: guarantors.rows, documents: docs.rows });
+  })
+);
 
 router.get(
   '/',
