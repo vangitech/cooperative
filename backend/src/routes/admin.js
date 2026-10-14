@@ -12,9 +12,14 @@ import { surplusForMonth, DEFAULT_PAYOUT_RATIO, periodOf } from '../lib/ledger.j
 import { assignVirtualAccount } from '../lib/virtualAccounts.js';
 import { ensureSchedules } from '../lib/loans.js';
 import { notify } from '../lib/notify.js';
+import {
+  borrowerOrg, orgGrantors, usersInRoles, recordReview,
+  separationCheck, runLoanKyc, ensureDirectChat, notifyMany,
+} from '../lib/loanflow.js';
 import { settleDueCollections } from '../lib/collections.js';
 import { runDuePlans } from '../lib/plans.js';
 import { ALL_ROLES } from '../lib/permissions.js';
+import { hasPerm } from '../lib/permissions.js';
 
 const router = express.Router();
 router.use(authenticate);
@@ -51,7 +56,7 @@ router.get('/stats', requirePerm('overview.read'), asyncHandler(async (req, res)
 /* ---------- Members ---------- */
 router.get('/users', requirePerm('members.read'), asyncHandler(async (req, res) => {
   const { rows } = await query(`
-    SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.role, u.status, u.member_no, u.created_at,
+    SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.role, u.status, u.member_no, u.email_verified, u.created_at,
            COALESCE(w.balance,0) AS balance,
            (SELECT COALESCE(SUM(amount),0) FROM savings s WHERE s.user_id=u.id) AS total_savings,
            k.status AS kyc_status,
@@ -89,19 +94,102 @@ router.patch('/users/:id/status', requirePerm('members.review'), asyncHandler(as
   res.json(rows[0]);
 }));
 
-router.patch('/users/:id/role', requirePerm('*'), asyncHandler(async (req, res) => {
+router.patch('/users/:id/role', requirePerm('staff.manage'), asyncHandler(async (req, res) => {
   const { role } = req.body;
   if (!ALL_ROLES.includes(role))
     return res.status(400).json({ message: `Invalid role (one of: ${ALL_ROLES.join(', ')})` });
   if (String(req.params.id) === String(req.user.id))
     return res.status(400).json({ message: 'You cannot change your own role' });
+  if (role === 'super_admin' && req.user.role !== 'super_admin')
+    return res.status(403).json({ message: 'Only a super-admin can grant super-admin' });
+  const target = await query('SELECT id, role FROM users WHERE id = $1', [req.params.id]);
+  if (!target.rows[0]) return res.status(404).json({ message: 'User not found' });
+  if (target.rows[0].role === 'super_admin') {
+    const supers = await query(
+      `SELECT COUNT(*) FROM users WHERE role = 'super_admin' AND status = 'active' AND id <> $1`,
+      [req.params.id]
+    );
+    if (Number(supers.rows[0].count) === 0)
+      return res.status(400).json({ message: 'Cannot demote the last active super-admin' });
+  }
   const { rows } = await query(
     `UPDATE users SET role=$1, updated_at=NOW() WHERE id=$2 RETURNING id, role`,
     [role, req.params.id]
   );
-  if (!rows[0]) return res.status(404).json({ message: 'User not found' });
-  audit(req, `member.role_${role}`, 'user', req.params.id, {});
+  audit(req, `member.role_${role}`, 'user', req.params.id, { from: target.rows[0].role });
   res.json(rows[0]);
+}));
+
+// R3: mark a member's email verified (staff check the inbox/code with the
+// member, or confirm a staff-created account's address). Super-admins and
+// member-reviewers only; every grant is audited.
+router.patch('/users/:id/verify-email', requirePerm('members.review'), asyncHandler(async (req, res) => {
+  const { rows } = await query(
+    `UPDATE users SET email_verified = true, updated_at = NOW() WHERE id = $1 RETURNING id, email, email_verified`,
+    [req.params.id]
+  );
+  if (!rows[0]) return res.status(404).json({ message: 'User not found' });
+  audit(req, 'member.email_verified', 'user', req.params.id, {});
+  res.json(rows[0]);
+}));
+
+/* ---------- Staff management (super-admin only) ---------- */
+// Super-admin staffs admins/officers/accountants/grantors and assigns roles.
+// Creates an active, email-verified staff user with wallet + GEN affiliation.
+router.post('/staff', requirePerm('staff.manage'), async (req, res) => {
+  try {
+    const { firstName, lastName, email, password, phone, role, orgId } = req.body || {};
+    if (!firstName || !lastName || !email)
+      return res.status(400).json({ message: 'First name, last name and email are required' });
+    if (!['admin', 'officer', 'accountant', 'grantor'].includes(role))
+      return res.status(400).json({ message: 'Role must be admin, officer, accountant or grantor' });
+    if (!password || password.length < 6)
+      return res.status(400).json({ message: 'Password must be at least 6 characters' });
+
+    const exists = await query('SELECT id FROM users WHERE email = $1', [String(email).toLowerCase()]);
+    if (exists.rows.length) return res.status(409).json({ message: 'Email already registered' });
+
+    const hash = await bcrypt.hash(password, 10);
+    const result = await withTransaction(async (client) => {
+      const affiliationId = orgId
+        ? (await client.query(`SELECT id FROM organisations WHERE id = $1 AND status = 'active'`, [orgId])).rows[0]?.id
+        : (await client.query(`SELECT id FROM organisations WHERE code = 'GEN'`)).rows[0].id;
+      if (!affiliationId) throw new Error('Organisation not found');
+      const memberNo = await nextMemberNo(client, affiliationId);
+      const u = await client.query(
+        `INSERT INTO users (first_name,last_name,email,password_hash,phone,role,status,member_no,email_verified)
+         VALUES ($1,$2,$3,$4,$5,$6,'active',$7,true)
+         RETURNING id, first_name, last_name, email, role, status, member_no`,
+        [firstName, lastName, String(email).toLowerCase(), hash, phone || null, role, memberNo]
+      );
+      await client.query('INSERT INTO wallets (user_id, balance) VALUES ($1, 0)', [u.rows[0].id]);
+      await client.query(
+        `INSERT INTO organisation_members (user_id, org_id, member_no, is_primary, verified_by)
+         VALUES ($1,$2,$3,true,$4)`,
+        [u.rows[0].id, affiliationId, memberNo, req.user.id]
+      );
+      await auditTx(client, req, 'staff.created', 'user', u.rows[0].id,
+        { email: u.rows[0].email, role, orgId: affiliationId });
+      return u.rows[0];
+    });
+    res.status(201).json(result);
+  } catch (e) {
+    res.status(e.status || 400).json({ message: e.message || 'Staff creation failed' });
+  }
+});
+
+// Staff directory (super-admin console + grantor lookup).
+router.get('/staff', requirePerm('members.read'), asyncHandler(async (req, res) => {
+  const { rows } = await query(
+    `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.role, u.status, u.created_at,
+            o.name AS org_name, o.code AS org_code
+     FROM users u
+     LEFT JOIN organisation_members m ON m.user_id = u.id AND m.is_primary AND m.status = 'active'
+     LEFT JOIN organisations o ON o.id = m.org_id
+     WHERE u.role IN ('super_admin','admin','officer','accountant','grantor')
+     ORDER BY u.role, u.created_at DESC`
+  );
+  res.json(rows);
 }));
 
 /* ---------- Staff-assisted onboarding (admin/officer creates member + KYC) ---------- */
@@ -129,7 +217,7 @@ router.post('/users', requirePerm('members.create'), async (req, res) => {
       return res.status(400).json({ message: 'Password must be at least 6 characters' });
     if (!['pending', 'active'].includes(status))
       return res.status(400).json({ message: 'Status must be pending or active' });
-    if (autoApproveKyc && req.user.role !== 'admin')
+    if (autoApproveKyc && !['admin', 'super_admin'].includes(req.user.role))
       return res.status(403).json({ message: 'Only admins can auto-approve KYC' });
     if (!bytidConfigured())
       return res.status(503).json({ message: 'Identity verification service unavailable — try again shortly' });
@@ -196,8 +284,8 @@ router.post('/users', requirePerm('members.create'), async (req, res) => {
       const memberNo = await nextMemberNo(client, affiliationId);
 
       const u = await client.query(
-        `INSERT INTO users (first_name,last_name,email,password_hash,phone,address,status,member_no,employment_type,ippis_number)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        `INSERT INTO users (first_name,last_name,email,password_hash,phone,address,status,member_no,employment_type,ippis_number,email_verified)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,false)
          RETURNING id, first_name, last_name, email, phone, role, status, member_no, employment_type, created_at`,
         [firstName, lastName, String(email).toLowerCase(), hash, phone || null, address || null,
          status, memberNo, employmentType, ippis]
@@ -316,41 +404,261 @@ router.get('/savings', requirePerm('savings.read'), asyncHandler(async (req, res
   res.json(rows);
 }));
 
-/* ---------- Loans ---------- */
+/* ---------- Loans (maker-checker: grantor → officer/KYC → accountant) ---------- */
 router.get('/loans', requirePerm('loans.read'), asyncHandler(async (req, res) => {
   const { rows } = await query(`
-    SELECT l.*, u.first_name, u.last_name, u.email
+    SELECT l.*, u.first_name, u.last_name, u.email, u.employment_type,
+           o.name AS org_name, o.code AS org_code,
+           g.first_name AS grantor_first, g.last_name AS grantor_last,
+           f.first_name AS officer_first, f.last_name AS officer_last,
+           (SELECT COUNT(*) FROM loan_reviews r WHERE r.loan_id = l.id) AS reviews
     FROM loans l JOIN users u ON u.id = l.user_id
+    LEFT JOIN organisation_members m ON m.user_id = u.id AND m.is_primary AND m.status = 'active'
+    LEFT JOIN organisations o ON o.id = m.org_id
+    LEFT JOIN users g ON g.id = l.grantor_id
+    LEFT JOIN users f ON f.id = l.officer_id
     ORDER BY l.created_at DESC
   `);
   res.json(rows);
 }));
 
-router.patch('/loans/:id', requirePerm('loans.review'), async (req, res) => {
+// Loan file: borrower + KYC snapshot + docs/guarantors + stage reviews.
+router.get('/loans/:id', requirePerm('loans.read'), asyncHandler(async (req, res) => {
+  const { rows } = await query(
+    `SELECT l.*, u.first_name, u.last_name, u.email, u.phone, u.employment_type, u.email_verified,
+            o.name AS org_name, o.code AS org_code
+     FROM loans l JOIN users u ON u.id = l.user_id
+     LEFT JOIN organisation_members m ON m.user_id = u.id AND m.is_primary AND m.status = 'active'
+     LEFT JOIN organisations o ON o.id = m.org_id
+     WHERE l.id = $1`,
+    [req.params.id]
+  );
+  const loan = rows[0];
+  if (!loan) return res.status(404).json({ message: 'Loan not found' });
+  const kyc = await query('SELECT status, id_type, id_number, dob, verification_result, verified_at FROM kyc_profiles WHERE user_id = $1', [loan.user_id]);
+  const docs = await query('SELECT id, doc_type, filename, mime, size_bytes, created_at FROM kyc_documents WHERE user_id = $1 ORDER BY created_at', [loan.user_id]);
+  const guarantors = await query('SELECT id, full_name, phone, relationship, status FROM guarantors WHERE user_id = $1', [loan.user_id]);
+  const reviews = await query(
+    `SELECT r.*, u.first_name, u.last_name, u.email, u.role
+     FROM loan_reviews r LEFT JOIN users u ON u.id = r.reviewer_id
+     WHERE r.loan_id = $1 ORDER BY r.created_at`,
+    [loan.id]
+  );
+  let kycResult = loan.kyc_result;
+  if (typeof kycResult === 'string') {
+    try { kycResult = JSON.parse(kycResult); } catch { kycResult = null; }
+  }
+  res.json({ loan: { ...loan, kyc_result: kycResult }, kyc: kyc.rows[0] || null, documents: docs.rows, guarantors: guarantors.rows, reviews: reviews.rows });
+}));
+
+// Stage 1 — Grantor approval. Only a grantor of the borrower's org (or a
+// super_admin override) may approve. The account officer then sees the
+// go-ahead and takes the file for KYC re-verification.
+router.patch('/loans/:id/grantor', requirePerm('loans.grantor_approve'), async (req, res) => {
   try {
-    const { status, note } = req.body;
-    if (!['approved', 'rejected'].includes(status))
-      return res.status(400).json({ message: 'Status must be approved or rejected' });
+    const { decision, note } = req.body || {};
+    if (!['approve', 'reject'].includes(decision))
+      return res.status(400).json({ message: 'decision must be approve or reject' });
 
     const result = await withTransaction(async (client) => {
       const l = await client.query('SELECT * FROM loans WHERE id=$1 FOR UPDATE', [req.params.id]);
       const loan = l.rows[0];
       if (!loan) throw new Error('Loan not found');
-      if (loan.status !== 'pending') throw new Error('Loan already reviewed');
+      if (loan.status !== 'pending') throw new Error(`Loan is already ${loan.status} — grantor stage is closed`);
 
-      if (status === 'rejected') {
-        const r = await client.query(
-          `UPDATE loans SET status='rejected', reviewed_by=$1, reviewed_at=NOW(), review_note=$2
-           WHERE id=$3 RETURNING *`,
-          [req.user.id, note || null, loan.id]
-        );
-        await auditTx(client, req, 'loan.rejected', 'loan', loan.id,
-          { amount: Number(loan.amount) },
-          { before: { status: 'pending' }, after: { status: 'rejected' } });
-        return r.rows[0];
+      const org = await borrowerOrg(client, loan.user_id);
+      if (req.user.role !== 'super_admin') {
+        if (!org) throw new Error('Borrower has no organisation — super_admin override required');
+        const grantors = await orgGrantors(client, org.id);
+        if (!grantors.some((g) => Number(g.id) === Number(req.user.id)))
+          throw new Error(`Only a grantor of ${org.name} may approve this loan`);
       }
+      await separationCheck(client, loan, req.user.id, req.user.role);
 
-      // approved → disburse into wallet
+      const status = decision === 'approve' ? 'grantor_approved' : 'rejected';
+      const r = await client.query(
+        `UPDATE loans SET status=$1, grantor_id=$2, grantor_note=$3, grantor_at=NOW()
+         WHERE id=$4 RETURNING *`,
+        [status, req.user.id, note || null, loan.id]
+      );
+      await recordReview(client, req, loan.id, 'grantor', decision, note, { org: org?.code || null });
+      await auditTx(client, req, `loan.grantor_${decision}d`, 'loan', loan.id,
+        { amount: Number(loan.amount), org: org?.code || null, note: note || null },
+        { before: { status: 'pending' }, after: { status } });
+      return { loan: r.rows[0], org };
+    });
+
+    const { loan, org } = result;
+    if (loan.status === 'grantor_approved') {
+      const officers = await query(`SELECT id FROM users WHERE role IN ('officer','admin','super_admin') AND status = 'active'`);
+      notifyMany(officers.rows.map((o) => o.id), {
+        title: 'Grantor approved — verify KYC',
+        body: `Loan #${loan.id} (${loan.amount}) under ${org?.name || 'member org'} has grantor go-ahead. Verify documents before pushing to payment.`,
+        link: '/admin/loans',
+      });
+      notify(loan.user_id, {
+        title: 'Grantor approved your loan',
+        body: `Your ${loan.amount} application passed the grantor. An account officer will now verify your documents.`,
+        link: '/loans',
+      });
+    } else {
+      notify(loan.user_id, {
+        title: 'Loan application update',
+        body: `Your loan application was not approved by the grantor${note ? `: ${note}` : '. Contact support for details.'}`,
+        link: '/loans',
+      });
+    }
+    res.json(loan);
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+});
+
+// Stage 2 — Officer KYC re-verification. Runs the FULL system pass live and
+// names exactly which checks fail. Pass → kyc_verified; fail → kyc_failed
+// (grantor + borrower notified; officer messages the grantor with the list).
+router.post('/loans/:id/verify-kyc', requirePerm('loans.verify_kyc'), async (req, res) => {
+  try {
+    const { note } = req.body || {};
+    const outcome = await withTransaction(async (client) => {
+      const l = await client.query('SELECT * FROM loans WHERE id=$1 FOR UPDATE', [req.params.id]);
+      const loan = l.rows[0];
+      if (!loan) throw new Error('Loan not found');
+      if (!['grantor_approved', 'kyc_failed'].includes(loan.status))
+        throw new Error(`Loan is ${loan.status} — needs grantor approval first`);
+      await separationCheck(client, loan, req.user.id, req.user.role);
+
+      const check = await runLoanKyc(client, loan.user_id);
+      const status = check.passed ? 'kyc_verified' : 'kyc_failed';
+      const r = await client.query(
+        `UPDATE loans SET status=$1, officer_id=$2, kyc_status=$3, kyc_result=$4,
+                kyc_note=$5, kyc_checked_at=NOW()
+         WHERE id=$6 RETURNING *`,
+        [status, req.user.id, check.passed ? 'passed' : 'failed',
+         JSON.stringify({ score: check.score, checks: check.checks, profile: check.profile }),
+         note || null, loan.id]
+      );
+      await recordReview(client, req, loan.id, 'officer_kyc', check.passed ? 'verified' : 'failed',
+        note || (check.passed ? null : `Failed: ${check.failed.join('; ')}`),
+        { score: check.score, failed: check.failed });
+      await auditTx(client, req, `loan.kyc_${check.passed ? 'verified' : 'failed'}`, 'loan', loan.id,
+        { score: check.score, failed: check.failed },
+        { before: { status: loan.status }, after: { status } });
+      return { loan: r.rows[0], check };
+    });
+
+    const { loan, check } = outcome;
+    if (check.passed) {
+      notify(loan.user_id, {
+        title: 'Documents verified',
+        body: `Your documents passed verification for loan #${loan.id}. It now awaits payment approval.`,
+        link: '/loans',
+      });
+      if (loan.grantor_id) notify(loan.grantor_id, {
+        title: 'KYC passed',
+        body: `Loan #${loan.id} passed full KYC (${check.score}%). The officer will push it for payment.`,
+        link: '/admin/loans',
+      });
+    } else {
+      const failedList = check.failed.join('; ');
+      notify(loan.user_id, {
+        title: 'Documents need attention',
+        body: `Loan #${loan.id} KYC failed: ${failedList}. Update your KYC/documents.`,
+        link: '/profile',
+      });
+      if (loan.grantor_id) notify(loan.grantor_id, {
+        title: 'Loan KYC failed',
+        body: `Loan #${loan.id} failed verification: ${failedList}. The account officer will message you.`,
+        link: '/admin/loans',
+      });
+    }
+    res.json({ loan, kyc: { passed: check.passed, score: check.score, failed: check.failed, checks: check.checks } });
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+});
+
+// Officer → grantor message: posts the failed-document list as the officer
+// into their 1:1 chat room (plus a notification), so the grantor sees it.
+router.post('/loans/:id/message-grantor', requirePerm('loans.verify_kyc'), async (req, res) => {
+  try {
+    const { body } = req.body || {};
+    if (!body || !String(body).trim()) return res.status(400).json({ message: 'Message is empty' });
+    const out = await withTransaction(async (client) => {
+      const l = await client.query('SELECT * FROM loans WHERE id=$1', [req.params.id]);
+      const loan = l.rows[0];
+      if (!loan) throw new Error('Loan not found');
+      if (!loan.grantor_id) throw new Error('No grantor on this loan yet');
+      const convId = await ensureDirectChat(client, req.user.id, loan.grantor_id,
+        `Loan #${loan.id} documents`);
+      const m = await client.query(
+        `INSERT INTO chat_messages (conversation_id, sender_id, body) VALUES ($1,$2,$3) RETURNING *`,
+        [convId, req.user.id, String(body).trim().slice(0, 2000)]
+      );
+      await recordReview(client, req, loan.id, 'officer_kyc', 'messaged_grantor', String(body).trim().slice(0, 500), { conversation: convId });
+      await auditTx(client, req, 'loan.grantor_messaged', 'loan', loan.id, { conversation: convId });
+      return { conversationId: convId, message: m.rows[0], grantorId: loan.grantor_id };
+    });
+    notify(out.grantorId, {
+      title: 'Message from account officer',
+      body: `Loan #${req.params.id}: ${String(body).slice(0, 120)}`,
+      link: '/admin/loans',
+    });
+    res.status(201).json(out);
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+});
+
+// Stage 2b — Officer pushes the KYC-passed file to payment approval.
+router.post('/loans/:id/push', requirePerm('loans.verify_kyc'), async (req, res) => {
+  try {
+    const { note } = req.body || {};
+    const result = await withTransaction(async (client) => {
+      const l = await client.query('SELECT * FROM loans WHERE id=$1 FOR UPDATE', [req.params.id]);
+      const loan = l.rows[0];
+      if (!loan) throw new Error('Loan not found');
+      if (loan.status !== 'kyc_verified') throw new Error(`Loan is ${loan.status} — verify KYC first`);
+      if (loan.pushed_at) throw new Error('Already pushed to payment approval');
+      const r = await client.query(
+        `UPDATE loans SET pushed_at=NOW(), pushed_by=$1 WHERE id=$2 RETURNING *`,
+        [req.user.id, loan.id]
+      );
+      await recordReview(client, req, loan.id, 'officer_push', 'pushed', note, {});
+      await auditTx(client, req, 'loan.pushed_to_payment', 'loan', loan.id,
+        { amount: Number(loan.amount), note: note || null },
+        { before: { status: 'kyc_verified', pushed: false }, after: { pushed: true } });
+      return r.rows[0];
+    });
+    const payers = await query(`SELECT id FROM users WHERE role IN ('accountant','super_admin') AND status = 'active'`);
+    notifyMany(payers.rows.map((p) => p.id), {
+      title: 'Loan ready for payment approval',
+      body: `Loan #${result.id} (${result.amount}) passed grantor + KYC. Open Admin → Loans to approve payment.`,
+      link: '/admin/loans',
+    });
+    notify(result.user_id, {
+      title: 'Loan sent for payment approval',
+      body: `Loan #${result.id} is with the payment approver. You will be notified on disbursement.`,
+      link: '/loans',
+    });
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+});
+
+// Stage 3 — Accountant approves payment: funds hit the wallet immediately.
+router.patch('/loans/:id/disburse', requirePerm('loans.disburse'), async (req, res) => {
+  try {
+    const { note } = req.body || {};
+    const result = await withTransaction(async (client) => {
+      const l = await client.query('SELECT * FROM loans WHERE id=$1 FOR UPDATE', [req.params.id]);
+      const loan = l.rows[0];
+      if (!loan) throw new Error('Loan not found');
+      if (loan.status !== 'kyc_verified') throw new Error(`Loan is ${loan.status} — needs officer KYC verification first`);
+      if (!loan.pushed_at) throw new Error('Officer has not pushed this loan for payment yet');
+      const sep = await separationCheck(client, loan, req.user.id, req.user.role);
+
       const w = await client.query('SELECT * FROM wallets WHERE user_id=$1 FOR UPDATE', [loan.user_id]);
       const newBalance = toMoney(Number(w.rows[0].balance) + Number(loan.amount));
       await client.query('UPDATE wallets SET balance=$1, updated_at=NOW() WHERE user_id=$2', [
@@ -361,8 +669,6 @@ router.patch('/loans/:id', requirePerm('loans.review'), async (req, res) => {
          VALUES ($1,$2,'loan_disbursement',$3,$4,$5,$6) RETURNING *`,
         [loan.user_id, w.rows[0].id, loan.amount, newBalance, generateRef('LND'), `Loan #${loan.id} disbursement`]
       );
-      // Disbursal creates the loan asset against the member's wallet claim.
-      // No float moves: this is internal credit creation, not a payout.
       await postJournal(client, req, { type: 'loan_disbursement', transactionId: disbTx.rows[0].id,
         reference: disbTx.rows[0].reference, amount: Number(loan.amount),
         lines: [
@@ -375,21 +681,78 @@ router.patch('/loans/:id', requirePerm('loans.review'), async (req, res) => {
         [req.user.id, note || null, loan.id]
       );
       await ensureSchedules(client, r.rows[0]);
-      await auditTx(client, req, 'loan.approved', 'loan', loan.id,
-        { amount: Number(loan.amount) },
-        { before: { status: 'pending', balance: Number(w.rows[0].balance) },
+      await recordReview(client, req, loan.id, 'accountant', 'disbursed', note, sep.override ? { override: true } : {});
+      await auditTx(client, req, 'loan.disbursed', 'loan', loan.id,
+        { amount: Number(loan.amount), override: sep.override || undefined },
+        { before: { status: 'kyc_verified', balance: Number(w.rows[0].balance) },
           after: { status: 'disbursed', balance: newBalance } });
       return r.rows[0];
     });
 
-    notify(result.user_id, status === 'approved'
-      ? { title: 'Loan approved', body: `Your loan of ${result.amount} has been disbursed to your wallet.`, link: '/loans' }
-      : { title: 'Loan application update', body: 'Your loan application was not approved. Contact support for details.', link: '/loans' });
+    notify(result.user_id, {
+      title: 'Loan disbursed',
+      body: `Your loan of ${result.amount} has been paid into your wallet.`,
+      link: '/loans',
+    });
+    if (result.grantor_id) notify(result.grantor_id, {
+      title: 'Loan disbursed', body: `Loan #${result.id} (${result.amount}) has been paid out.`, link: '/admin/loans',
+    });
+    if (result.officer_id) notify(result.officer_id, {
+      title: 'Loan disbursed', body: `Loan #${result.id} (${result.amount}) has been paid out.`, link: '/admin/loans',
+    });
     res.json(result);
   } catch (e) {
     res.status(400).json({ message: e.message });
   }
 });
+
+// Stage-aware rejection from any pending stage.
+router.patch('/loans/:id/reject', async (req, res) => {
+  try {
+    const { note } = req.body || {};
+    const role = req.user.role;
+    const need = role === 'grantor' ? 'loans.grantor_approve'
+      : role === 'accountant' ? 'loans.disburse' : 'loans.verify_kyc';
+    if (!hasPerm(role, need))
+      return res.status(403).json({ message: 'Insufficient permissions' });
+
+    const result = await withTransaction(async (client) => {
+      const l = await client.query('SELECT * FROM loans WHERE id=$1 FOR UPDATE', [req.params.id]);
+      const loan = l.rows[0];
+      if (!loan) throw new Error('Loan not found');
+      if (['disbursed', 'repaid', 'rejected'].includes(loan.status)) throw new Error(`Loan is already ${loan.status}`);
+      const stage = loan.status === 'pending' ? 'grantor'
+        : loan.status === 'grantor_approved' ? 'officer_kyc'
+        : loan.status === 'kyc_failed' ? 'officer_kyc' : 'accountant';
+      const r = await client.query(
+        `UPDATE loans SET status='rejected', reviewed_by=$1, reviewed_at=NOW(), review_note=$2
+         WHERE id=$3 RETURNING *`,
+        [req.user.id, note || null, loan.id]
+      );
+      await recordReview(client, req, loan.id, stage, 'rejected', note, {});
+      await auditTx(client, req, 'loan.rejected', 'loan', loan.id,
+        { amount: Number(loan.amount), stage },
+        { before: { status: loan.status }, after: { status: 'rejected' } });
+      return r.rows[0];
+    });
+    notify(result.user_id, {
+      title: 'Loan application update',
+      body: `Your loan application was not approved${note ? `: ${note}` : '. Contact support for details.'}`,
+      link: '/loans',
+    });
+    res.json(result);
+  } catch (e) {
+    res.status(400).json({ message: e.message });
+  }
+});
+
+// Legacy single-step review retired — the file must walk grantor → officer →
+// accountant so no one person can apply-to-disburse alone.
+router.patch('/loans/:id', asyncHandler(async (req, res) => {
+  res.status(410).json({
+    message: 'Single-step loan review is retired. Use grantor approve → officer KYC verify → push → accountant disburse.',
+  });
+}));
 
 /* ---------- Dividends ---------- */
 router.get('/dividends', requirePerm('dividends.manage'), asyncHandler(async (req, res) => {

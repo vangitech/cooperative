@@ -251,8 +251,8 @@ router.post('/complete', authLimiter, async (req, res) => {
       )).rows[0].id;
       const memberNo = await nextMemberNo(client, affiliationId);
       const { rows } = await client.query(
-        `INSERT INTO users (first_name,last_name,email,password_hash,phone,address,status,member_no,employment_type,ippis_number)
-         VALUES ($1,$2,$3,$4,$5,$6,'pending',$7,$8,$9)
+        `INSERT INTO users (first_name,last_name,email,password_hash,phone,address,status,member_no,employment_type,ippis_number,email_verified)
+         VALUES ($1,$2,$3,$4,$5,$6,'pending',$7,$8,$9,true)
          RETURNING id, first_name, last_name, email, role, status, member_no, employment_type, created_at`,
         [firstName, lastName, it.email, hash, phone || null, address || null,
          memberNo, it.employment_type, it.employment_type === 'civil_servant' ? it.id_number : null]

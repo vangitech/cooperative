@@ -1,6 +1,6 @@
 import express from 'express';
 import { query, withTransaction } from '../db.js';
-import { authenticate } from '../middleware/auth.js';
+import { authenticate, requireVerifiedEmail } from '../middleware/auth.js';
 import { generateRef, isPositiveNumber, toMoney, asyncHandler, sendCsv } from '../utils/helpers.js';
 import { audit, auditTx } from '../lib/audit.js';
 import { postJournal } from '../lib/ledger.js';
@@ -37,7 +37,7 @@ router.get('/analytics', asyncHandler(async (req, res) => {
             SUM(CASE WHEN type IN
               ('deposit','savings','dividend','loan_disbursement','fixed_maturity','refund','fixed_break')
               THEN amount ELSE 0 END)::float AS inflow,
-            SUM(CASE WHEN type IN ('withdrawal','loan_repayment','fixed_deposit')
+            SUM(CASE WHEN type IN ('withdrawal','loan_repayment','fixed_deposit','savings_plan')
               THEN amount ELSE 0 END)::float AS outflow,
             COUNT(*) AS count
      FROM transactions
@@ -64,6 +64,53 @@ router.get('/analytics', asyncHandler(async (req, res) => {
     monthly: monthly.rows,
     byType: byType.rows,
     summary: { inflow, outflow, net: inflow - outflow },
+  });
+}));
+
+// Member statement of account (JSON preview for Report page).
+// ?from=YYYY-MM-DD&to=YYYY-MM-DD → opening/closing balances + rows + summary.
+router.get('/statement', asyncHandler(async (req, res) => {
+  const { from, to } = req.query;
+  const params = [req.user.id];
+  let range = '';
+  if (from) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from)) return res.status(400).json({ message: 'from must be YYYY-MM-DD' });
+    params.push(from);
+    range += ` AND created_at >= $${params.length}`;
+  }
+  if (to) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) return res.status(400).json({ message: 'to must be YYYY-MM-DD' });
+    params.push(`${to}T23:59:59.999Z`);
+    range += ` AND created_at <= $${params.length}`;
+  }
+  const { rows: txs } = await query(
+    `SELECT id, created_at, reference, type, description, amount, balance_after
+     FROM transactions WHERE user_id = $1 ${range} ORDER BY created_at`,
+    params
+  );
+  const openQ = from
+    ? await query(
+      `SELECT balance_after FROM transactions WHERE user_id = $1 AND created_at < $2 ORDER BY created_at DESC LIMIT 1`,
+      [req.user.id, from]
+    )
+    : { rows: [] };
+  const walletQ = await query('SELECT balance FROM wallets WHERE user_id = $1', [req.user.id]);
+  const opening = openQ.rows[0] ? Number(openQ.rows[0].balance_after) : 0;
+  const closing = txs.length ? Number(txs[txs.length - 1].balance_after) : (openQ.rows[0] ? opening : Number(walletQ.rows[0]?.balance || 0));
+  const inflowTypes = ['deposit', 'fund', 'savings', 'dividend', 'loan_disbursement', 'transfer_in', 'refund', 'fixed_maturity', 'fixed_break'];
+  const inflow = txs.filter((t) => inflowTypes.includes(t.type)).reduce((s, t) => s + Number(t.amount), 0);
+  const outflow = txs.filter((t) => !inflowTypes.includes(t.type)).reduce((s, t) => s + Number(t.amount), 0);
+  const me = await query('SELECT first_name, last_name, email, member_no FROM users WHERE id = $1', [req.user.id]);
+  audit(req, 'statement.generated', 'statement', null, { from: from || null, to: to || null, rows: txs.length });
+  res.json({
+    member: me.rows[0] || null,
+    from: from || null,
+    to: to || null,
+    generatedAt: new Date().toISOString(),
+    openingBalance: opening,
+    closingBalance: closing,
+    summary: { count: txs.length, inflow, outflow, net: inflow - outflow },
+    transactions: txs,
   });
 }));
 
@@ -128,7 +175,7 @@ router.post('/deposit', async (req, res) => {
   }
 });
 
-router.post('/withdraw', async (req, res) => {
+router.post('/withdraw', requireVerifiedEmail, async (req, res) => {
   try {
     const { amount, description } = req.body;
     if (!isPositiveNumber(amount)) return res.status(400).json({ message: 'Invalid amount' });
@@ -191,7 +238,7 @@ router.get('/resolve-recipient', asyncHandler(async (req, res) => {
 }));
 
 // Member-to-member transfer (instant, no fee).
-router.post('/transfer', asyncHandler(async (req, res) => {
+router.post('/transfer', requireVerifiedEmail, asyncHandler(async (req, res) => {
   const { recipient, amount } = req.body;
   if (!recipient) return res.status(400).json({ message: 'Recipient email or account number is required' });
   if (!isPositiveNumber(amount)) return res.status(400).json({ message: 'Invalid amount' });

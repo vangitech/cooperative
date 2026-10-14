@@ -60,7 +60,7 @@ router.post('/login', authLimiter, async (req, res) => {
 router.get('/me', authenticate, asyncHandler(async (req, res) => {
   const { rows } = await query(
     `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.address, u.role,
-            u.status, u.member_no, u.created_at, w.balance,
+            u.status, u.member_no, u.email_verified, u.created_at, w.balance,
             o.id AS org_id, o.name AS org_name, o.code AS org_code, o.type AS org_type
      FROM users u LEFT JOIN wallets w ON w.user_id = u.id
      LEFT JOIN organisation_members m ON m.user_id = u.id AND m.is_primary AND m.status = 'active'

@@ -43,9 +43,9 @@ router.post(
 
     // Fan out to in-app notifications in one query.
     const targets =
-      aud === 'all' ? `role IN ('member','officer','accountant')`
+      aud === 'all' ? `role IN ('member','grantor','officer','accountant')`
       : aud === 'members' ? `role = 'member'`
-      : `role IN ('officer','accountant','admin')`;
+      : `role IN ('super_admin','admin','officer','accountant','grantor')`;
     await query(
       `INSERT INTO notifications (user_id, title, body, link)
        SELECT id, $1, $2, '/dashboard' FROM users WHERE ${targets} AND status = 'active'`,

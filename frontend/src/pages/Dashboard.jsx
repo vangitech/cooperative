@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/format';
 import StatCard from '@/components/StatCard';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Wallet, PiggyBank, HandCoins, TrendingUp, Megaphone } from 'lucide-react';
+import { Wallet, PiggyBank, HandCoins, TrendingUp, Megaphone, FileText } from 'lucide-react';
 import { useBalanceHidden, masked, BalanceEye } from '@/components/balance';
 
 export default function Dashboard() {
+  const navigate = useNavigate();
   const [data, setData] = useState({ wallet: null, savings: null, loans: [], transactions: [], dividends: null });
   const [vaccount, setVaccount] = useState(null);
   const [notices, setNotices] = useState([]);
@@ -32,6 +35,19 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="mr-auto">
+          <h2 className="text-lg font-semibold">Overview</h2>
+          <p className="text-sm text-muted-foreground">Your cooperative account at a glance</p>
+        </div>
+        <Button onClick={() => navigate('/statement')}>
+          <FileText className="h-4 w-4" /> Report
+        </Button>
+        <Button variant="outline" onClick={() => navigate('/wallet')}>
+          <Wallet className="h-4 w-4" /> Wallet
+        </Button>
+      </div>
+
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardContent className="p-5 flex items-start justify-between">
@@ -80,7 +96,12 @@ export default function Dashboard() {
       )}
 
       <Card>
-        <CardHeader><CardTitle>Recent Transactions</CardTitle></CardHeader>        <CardContent className="p-0">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <CardTitle>Recent Transactions</CardTitle>
+          <Button variant="outline" size="sm" onClick={() => navigate('/statement')}>
+            <FileText className="h-4 w-4" /> Full report
+          </Button>
+        </CardHeader>        <CardContent className="p-0">
           {data.transactions.length === 0 ? (
             <p className="p-6 text-sm text-muted-foreground">No transactions yet.</p>
           ) : (

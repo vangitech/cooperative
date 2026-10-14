@@ -168,7 +168,7 @@ router.get(
     const { rows } = await query('SELECT * FROM kyc_documents WHERE id = $1', [req.params.id]);
     const doc = rows[0];
     if (!doc) return res.status(404).json({ message: 'Document not found' });
-    const staff = ['admin', 'officer', 'accountant'].includes(req.user.role);
+    const staff = ['super_admin', 'admin', 'officer', 'accountant'].includes(req.user.role);
     if (doc.user_id !== req.user.id && !staff)
       return res.status(403).json({ message: 'Insufficient permissions' });
     res.setHeader('Content-Type', doc.mime);

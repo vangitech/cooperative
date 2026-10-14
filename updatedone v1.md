@@ -29,3 +29,17 @@ stays in `update v1.md` (P4 hash-chain, L3–L5 ledger, D1–D4 dividends).
 | D2 | Surplus computation + policy cap | ✅ done | 2026-10-14 | 4d30b08 | surplusForMonth from journals; 60% default ratio; cap enforced both paths; surplus preview in console — live-verified |
 
 Legend: ⬜ pending · 🟡 in progress · ✅ done
+
+## Registration
+
+| # | Item | Status | Date | Notes |
+|---|------|--------|------|-------|
+| R1 | Resolve `member_drift#3` deliberately | ✅ done | 2026-10-14 | Live-investigated: plan-run savings shared the `savings` inflow type (manual deposits credit, plan runs debit) + mis-recorded balance_after on tx #29. Split `savings_plan` outflow type (code + historic migrate), backfilled missing ₦500 top-up record-only (no funds moved, no journal — pre-backfill era absorbed by JE-100034), full recon passed, wallet untouched ₦12,000, item kept as resolved history with note |
+| R3 | Gate money-out on verified email | ✅ done | 2026-10-14 | `users.email_verified`; staged self-register sets true, staff-assisted starts false; gates wallet withdraw + transfer + bank payout (403 + audit); actives grandfathered true on migrate; admin can mark verified (audited); surfaced in /auth/me + Members |
+
+## Roles & Loan maker-checker
+
+| # | Item | Status | Date | Notes |
+|---|------|--------|------|-------|
+| S1 | Super-admin sole full rights | ✅ done | 2026-10-14 | New `super_admin` role holds `*` + exclusive `staff.manage`; `admin` downgraded to operational perms (no role grants); role changes restricted to super-admin (last-super_admin protected); Staff console (`/admin/staff`); seed via `SUPERADMIN_EMAIL/PASSWORD` on migrate or `npm run make-superadmin -- <email> <pass>`; Wuse Market org seeded |
+| L6 | Loan maker-checker grantor→officer→accountant | ✅ done | 2026-10-14 | Statuses pending→grantor_approved→kyc_verified→disbursed (+kyc_failed retry, rejected); grantor of borrower's org approves (super_admin override); officer re-runs FULL KYC live naming failed checks, messages grantor via 1:1 chat + notification, pushes to payment; accountant disburses only after push; separation of duties enforced (super_admin override logged); legacy single-step review retired (410); every stage in `loan_reviews` + audit + notifications |

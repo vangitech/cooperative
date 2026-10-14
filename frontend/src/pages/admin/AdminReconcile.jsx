@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/format';
@@ -15,7 +16,12 @@ import {
 } from '@/components/ui/dialog';
 import { Scale, Play, CheckCircle2, AlertTriangle } from 'lucide-react';
 
+function safeParse(s) {
+  try { return JSON.parse(s); } catch { return null; }
+}
+
 export default function AdminReconcile() {
+  const navigate = useNavigate();
   const [runs, setRuns] = useState(null);
   const [suspense, setSuspense] = useState(null);
   const [floats, setFloats] = useState({ '1001': '', '1002': '' });
@@ -137,13 +143,26 @@ export default function AdminReconcile() {
                   <TableHead className="text-right">Actual</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="hidden md:table-cell">Raised</TableHead>
-                  <TableHead className="w-24"></TableHead>
+                  <TableHead className="w-32"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {suspense.map((s) => (
+                {suspense.map((s) => {
+                  const detail = typeof s.detail === 'string' ? safeParse(s.detail) : s.detail;
+                  const memberId = detail?.user_id;
+                  return (
                   <TableRow key={s.id}>
-                    <TableCell className="text-sm font-mono">{s.kind}</TableCell>
+                    <TableCell>
+                      <p className="text-sm font-mono">{s.kind}</p>
+                      {detail && (
+                        <p className="text-[11px] text-muted-foreground font-mono">
+                          {detail.email ? `${detail.email} ` : ''}{memberId ? `#${memberId}` : ''}
+                        </p>
+                      )}
+                      {s.resolution && (
+                        <p className="text-[11px] text-muted-foreground mt-1 max-w-md">{s.resolution}</p>
+                      )}
+                    </TableCell>
                     <TableCell className="text-right font-medium">{formatCurrency(s.expected)}</TableCell>
                     <TableCell className="text-right font-medium">{formatCurrency(s.actual)}</TableCell>
                     <TableCell>
@@ -156,11 +175,20 @@ export default function AdminReconcile() {
                     </TableCell>
                     <TableCell>
                       {s.status === 'open' && (
-                        <Button variant="ghost" size="sm" onClick={() => setResolveTarget(s)}>Resolve</Button>
+                        <div className="flex gap-1">
+                          {String(s.kind).startsWith('member_drift#') && memberId && (
+                            <Button variant="outline" size="sm" title="Top up this member (officer funding with note)"
+                              onClick={() => navigate(`/admin/members?fund=${memberId}`)}>
+                              Top&nbsp;up
+                            </Button>
+                          )}
+                          <Button variant="ghost" size="sm" onClick={() => setResolveTarget(s)}>Resolve</Button>
+                        </div>
                       )}
                     </TableCell>
                   </TableRow>
-                ))}
+                  );
+                })}
               </TableBody>
             </Table>
           )}

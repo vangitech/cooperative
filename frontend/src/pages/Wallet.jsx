@@ -16,7 +16,7 @@ import {
   Tooltip as RTooltip, CartesianGrid, Legend,
 } from 'recharts';
 
-const OUT_TYPES = ['withdrawal', 'loan_repayment', 'transfer_out', 'collection_repayment', 'collection_down', 'fixed_deposit'];
+const OUT_TYPES = ['withdrawal', 'loan_repayment', 'transfer_out', 'collection_repayment', 'collection_down', 'fixed_deposit', 'savings_plan'];
 
 export default function Wallet() {
   const { refresh } = useAuth();

@@ -19,6 +19,8 @@ import storeRoutes from './routes/store.js';
 import announcementRoutes from './routes/announcements.js';
 import planRoutes from './routes/plans.js';
 import reportsRoutes from './routes/reports.js';
+import complianceRoutes from './routes/compliance.js';
+import chatRoutes from './routes/chat.js';
 import orgsRoutes from './routes/orgs.js';
 import ledgerRoutes from './routes/ledger.js';
 
@@ -53,6 +55,8 @@ app.use('/api/store', storeRoutes);
 app.use('/api/announcements', announcementRoutes);
 app.use('/api/plans', planRoutes);
 app.use('/api/admin/reports', reportsRoutes);
+app.use('/api/admin/compliance', complianceRoutes);
+app.use('/api/chat', chatRoutes);
 app.use('/api/orgs', orgsRoutes);
 app.use('/api/admin/ledger', ledgerRoutes);
 

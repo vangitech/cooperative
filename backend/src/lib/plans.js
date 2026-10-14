@@ -32,7 +32,7 @@ export async function executePlan(client, plan) {
   ]);
   const tx = await client.query(
     `INSERT INTO transactions (user_id, wallet_id, type, amount, balance_after, reference, description)
-     VALUES ($1,$2,'savings',$3,$4,$5,$6) RETURNING *`,
+     VALUES ($1,$2,'savings_plan',$3,$4,$5,$6) RETURNING *`,
     [plan.user_id, w.rows[0].id, amt, newBalance, generateRef('SAV'), `Recurring savings (${plan.savings_type})`]
   );
   await client.query(

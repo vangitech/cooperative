@@ -12,7 +12,17 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
-const statusVariant = { pending: 'warning', approved: 'secondary', disbursed: 'default', rejected: 'destructive', repaid: 'success' };
+const statusVariant = { pending: 'warning', grantor_approved: 'secondary', kyc_failed: 'destructive', kyc_verified: 'default', approved: 'secondary', disbursed: 'default', rejected: 'destructive', repaid: 'success' };
+
+const STAGE_HINT = {
+  pending: 'Awaiting grantor approval',
+  grantor_approved: 'Grantor approved — officer verifying documents',
+  kyc_failed: 'Documents need attention — check notifications',
+  kyc_verified: 'Verified — awaiting payment approval',
+  disbursed: 'Paid out',
+  repaid: 'Fully repaid',
+  rejected: 'Not approved',
+};
 
 export default function Loans() {
   const { refresh } = useAuth();
@@ -43,7 +53,7 @@ export default function Loans() {
       });
       setForm({ amount: '', durationMonths: 6, purpose: '', productId: '' });
       await load();
-      setMsg({ type: 'ok', text: 'Loan application submitted. Awaiting approval.' });
+      setMsg({ type: 'ok', text: 'Loan application submitted. Your grantor will review it first.' });
     } catch (e) { setMsg({ type: 'err', text: e.message }); }
   };
 
@@ -119,7 +129,9 @@ export default function Loans() {
                   <TableCell className="text-right">{formatCurrency(l.amount)}</TableCell>
                   <TableCell className="text-right">{formatCurrency(l.total_repayable)}</TableCell>
                   <TableCell className="text-right">{formatCurrency(l.amount_paid)}</TableCell>
-                  <TableCell><Badge variant={statusVariant[l.status]} className="capitalize">{l.status}</Badge></TableCell>
+                  <TableCell><Badge variant={statusVariant[l.status]} className="capitalize">{String(l.status).replace('_', ' ')}</Badge>
+                    {STAGE_HINT[l.status] && <p className="text-[11px] text-muted-foreground mt-0.5">{STAGE_HINT[l.status]}</p>}
+                  </TableCell>
                   <TableCell className="text-right whitespace-nowrap">
                     {['disbursed', 'approved'].includes(l.status) && (
                       <Button size="sm" variant="ghost" onClick={() => viewSchedule(l)}>Schedule</Button>

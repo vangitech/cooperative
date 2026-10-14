@@ -29,9 +29,9 @@ export default function ProtectedRoute({ children, adminOnly = false }) {
       </div>
     );
 
-  // Staff console: full admins plus officers and accountants (each sees
-  // only the sections their permissions allow).
-  if (adminOnly && !['admin', 'officer', 'accountant'].includes(user.role))
+  // Staff console: super_admin (sole full rights) plus admin, officers,
+  // accountants and grantors (each sees only sections their role allows).
+  if (adminOnly && !['super_admin', 'admin', 'officer', 'accountant', 'grantor'].includes(user.role))
     return <Navigate to="/dashboard" replace />;
 
   return children;

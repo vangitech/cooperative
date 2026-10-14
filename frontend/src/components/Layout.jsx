@@ -1,14 +1,25 @@
+import { useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { cn } from '@/lib/utils';
 import { initials } from '@/lib/format';
 import {
   LayoutDashboard, Wallet, PiggyBank, HandCoins, TrendingUp,
-  User, LogOut, ShieldCheck, ShoppingBag
+  User, LogOut, ShieldCheck, ShoppingBag, FileText,
+  Menu, PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Separator } from '@/components/ui/separator';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem,
+  DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import NotificationsBell from '@/components/NotificationsBell';
 import ThemeToggle from '@/components/ThemeToggle';
+import ChatWidget from '@/components/ChatWidget';
 
 const memberNav = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -17,6 +28,7 @@ const memberNav = [
   { to: '/loans', label: 'Loans', icon: HandCoins },
   { to: '/market', label: 'Market', icon: ShoppingBag },
   { to: '/dividends', label: 'Dividends', icon: TrendingUp },
+  { to: '/statement', label: 'Report', icon: FileText },
   { to: '/profile', label: 'Profile', icon: User },
 ];
 
@@ -24,73 +36,157 @@ const adminBackNav = [
   { to: '/admin', label: 'Back to Admin Console', icon: ShieldCheck },
 ];
 
-export default function Layout() {
-  const { user, logout } = useAuth();
-  const navigate = useNavigate();
-  const isStaff = ['admin', 'officer', 'accountant'].includes(user?.role);
-  const nav = isStaff ? [...memberNav, ...adminBackNav] : memberNav;
-
-  const handleLogout = () => { logout(); navigate('/login'); };
-
+function SidebarContent({ nav, collapsed, onNavigate }) {
   return (
-    <div className="min-h-screen flex bg-muted/30">
-      {/* Sidebar */}
-      <aside className="hidden md:flex w-64 flex-col border-r bg-background">
-        <div className="h-16 flex items-center gap-2 px-5 border-b">
-          <div className="h-8 w-8 rounded-lg bg-primary text-primary-foreground grid place-items-center font-bold">
-            M
-          </div>
-          <div>
-            <p className="font-semibold leading-tight">MPCS</p>
-            <p className="text-xs text-muted-foreground">Cooperative Society</p>
-          </div>
+    <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
+      <div className={cn(
+        'h-16 flex items-center gap-2.5 border-b border-sidebar-border/60',
+        collapsed ? 'justify-center px-2' : 'px-5',
+      )}>
+        <div className="h-8 w-8 shrink-0 rounded-lg bg-primary text-primary-foreground grid place-items-center font-bold">
+          M
         </div>
-
-        <nav className="flex-1 p-3 space-y-1">
+        {!collapsed && (
+          <div className="leading-tight">
+            <p className="font-semibold text-sm">MPCS</p>
+            <p className="text-[11px] text-muted-foreground">Cooperative Society</p>
+          </div>
+        )}
+      </div>
+      <ScrollArea className="flex-1">
+        <nav className={cn('space-y-0.5', collapsed ? 'p-2' : 'p-3')}>
           {nav.map(({ to, label, icon: Icon }) => (
             <NavLink
-              key={to} to={to} end
+              key={to} to={to} end={to === '/dashboard'}
+              onClick={onNavigate}
+              title={collapsed ? label : undefined}
               className={({ isActive }) =>
                 cn(
-                  'flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
-                  isActive ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                  'group flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
+                  collapsed && 'justify-center px-0',
+                  isActive
+                    ? 'bg-primary text-primary-foreground shadow-sm'
+                    : 'text-muted-foreground hover:bg-accent hover:text-foreground'
                 )
               }
             >
-              <Icon className="h-4 w-4" />
-              {label}
+              <Icon className="h-4 w-4 shrink-0" />
+              {!collapsed && <span className="truncate">{label}</span>}
             </NavLink>
           ))}
         </nav>
+      </ScrollArea>
+    </div>
+  );
+}
 
-        <div className="p-3 border-t">
-          <div className="flex items-center gap-3 px-2 py-2">
-            <div className="h-9 w-9 rounded-full bg-primary/10 text-primary grid place-items-center font-semibold text-sm">
-              {initials(user?.first_name, user?.last_name)}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium truncate">{user?.first_name} {user?.last_name}</p>
-              <p className="text-xs text-muted-foreground truncate capitalize">{user?.role}</p>
-            </div>
-          </div>
-          <Button variant="ghost" className="w-full justify-start mt-1" onClick={handleLogout}>
-            <LogOut className="h-4 w-4" /> Log out
-          </Button>
-        </div>
+export default function Layout() {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(
+    () => localStorage.getItem('mpcs:member:collapsed') === '1',
+  );
+
+  const isStaff = ['super_admin', 'admin', 'officer', 'accountant', 'grantor'].includes(user?.role);
+  const nav = isStaff ? [...memberNav, ...adminBackNav] : memberNav;
+
+  const handleLogout = () => { logout(); navigate('/login'); };
+  const toggleCollapsed = () => {
+    setCollapsed((c) => {
+      localStorage.setItem('mpcs:member:collapsed', c ? '0' : '1');
+      return !c;
+    });
+  };
+
+  return (
+    <div className="min-h-screen flex bg-muted/30">
+      {/* Desktop sidebar — collapsible */}
+      <aside className={cn(
+        'hidden md:flex shrink-0 border-r bg-sidebar transition-all duration-200 ease-in-out',
+        collapsed ? 'w-[76px]' : 'w-64',
+      )}>
+        <SidebarContent nav={nav} collapsed={collapsed} />
       </aside>
 
       {/* Main */}
       <div className="flex-1 flex flex-col min-w-0">
-        <header className="h-16 border-b bg-background flex items-center px-4 md:px-6 justify-between">
-          <h1 className="font-semibold capitalize">
-            {isStaff ? 'Member View' : 'Member Portal'}
-          </h1>
-          <div className="flex items-center gap-1">
-            <span className="text-sm text-muted-foreground hidden sm:block mr-2">
-              Welcome back, {user?.first_name}
-            </span>
-            <ThemeToggle />
-            <NotificationsBell />
+        <header className="h-16 border-b bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-30">
+          <div className="flex h-full items-center gap-2 px-4 md:px-6">
+            {/* Mobile menu */}
+            <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+              <SheetTrigger asChild>
+                <Button variant="ghost" size="icon" className="md:hidden">
+                  <Menu className="h-5 w-5" />
+                </Button>
+              </SheetTrigger>
+              <SheetContent side="left" className="p-0 w-72 bg-sidebar">
+                <SidebarContent nav={nav} onNavigate={() => setMobileOpen(false)} />
+              </SheetContent>
+            </Sheet>
+
+            {/* Collapse toggle — top left */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={toggleCollapsed}
+              title={collapsed ? 'Expand menu' : 'Collapse menu'}
+              className="hidden md:inline-flex"
+            >
+              {collapsed ? <PanelLeftOpen className="h-5 w-5" /> : <PanelLeftClose className="h-5 w-5" />}
+            </Button>
+
+            <h1 className="font-semibold capitalize">
+              {isStaff ? 'Member View' : 'Member Portal'}
+            </h1>
+
+            {/* Top-right: user name + avatar + logout */}
+            <div className="ml-auto flex items-center gap-2">
+              <span className="text-sm text-muted-foreground hidden lg:block mr-1">
+                Welcome back, {user?.first_name}
+              </span>
+              <ThemeToggle />
+              <NotificationsBell />
+              <Separator orientation="vertical" className="h-8" />
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" className="h-9 px-2 gap-2">
+                    <Avatar className="h-7 w-7">
+                      <AvatarFallback className="bg-primary/10 text-primary text-xs">
+                        {initials(user?.first_name, user?.last_name)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <span className="hidden sm:block text-sm font-medium">
+                      {user?.first_name} {user?.last_name}
+                    </span>
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuLabel>
+                    <div className="flex flex-col">
+                      <span>{user?.first_name} {user?.last_name}</span>
+                      <span className="text-xs font-normal text-muted-foreground">{user?.email}</span>
+                    </div>
+                  </DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => navigate('/profile')}>
+                    <User className="h-4 w-4" /> Profile
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => navigate('/statement')}>
+                    <FileText className="h-4 w-4" /> Report / Statement
+                  </DropdownMenuItem>
+                  {isStaff && (
+                    <DropdownMenuItem onClick={() => navigate('/admin')}>
+                      <ShieldCheck className="h-4 w-4" /> Back to Admin Console
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:text-destructive">
+                    <LogOut className="h-4 w-4" /> Log out
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
           </div>
         </header>
 
@@ -98,6 +194,7 @@ export default function Layout() {
           <Outlet />
         </main>
       </div>
+      <ChatWidget />
     </div>
   );
 }

@@ -10,7 +10,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "migrate": "node src/migrate.js"
+    "migrate": "node src/migrate.js",
+    "make-superadmin": "node scripts/make-superadmin.js"
   },
   "dependencies": {
     "@uverifyng/node": "^0.2.2",

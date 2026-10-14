@@ -37,12 +37,14 @@ export default function AdminDashboard() {
   const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [txs, setTxs] = useState(null);
+  const [compliance, setCompliance] = useState(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
     Promise.all([api.get('/admin/stats'), api.get('/admin/transactions')])
       .then(([s, t]) => { setData(s); setTxs(t); })
       .catch((e) => setError(e.message));
+    api.get('/admin/compliance').then(setCompliance).catch(() => setCompliance(null));
   }, []);
 
   const loading = !data || !txs;
@@ -90,6 +92,24 @@ export default function AdminDashboard() {
 
   return (
     <div className="w-full space-y-6">
+      {compliance && (compliance.summary?.expiring > 0 || compliance.summary?.expired > 0) && (
+        <Alert variant={compliance.summary?.expired > 0 ? 'destructive' : 'default'} className="border-amber-500/40">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Compliance attention needed</AlertTitle>
+          <AlertDescription className="flex flex-wrap items-center gap-2">
+            <span>
+              {compliance.summary.expired > 0 && `${compliance.summary.expired} expired`}
+              {compliance.summary.expired > 0 && compliance.summary.expiring > 0 && ' · '}
+              {compliance.summary.expiring > 0 && `${compliance.summary.expiring} expiring within 60 days`}
+              {' — daily countdown is active.'}
+            </span>
+            <Button size="sm" variant="outline" onClick={() => navigate('/admin/compliance')}>
+              Open Compliance <ArrowRight className="h-3.5 w-3.5" />
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* KPI row */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {loading ? (

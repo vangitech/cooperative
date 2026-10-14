@@ -8,6 +8,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import AdminActivityBell from '@/components/AdminActivityBell';
+import ChatWidget from '@/components/ChatWidget';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 import { Breadcrumb } from '@/components/ui/breadcrumb';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -19,32 +20,38 @@ import {
 import {
   LayoutDashboard, Users, HandCoins, TrendingUp, Receipt,
   Menu, LogOut, User as UserIcon, Shield, Home, Search, ScrollText, Store, Megaphone,
-  PanelLeftClose, PanelLeftOpen, FileText, Building2, Scale,
+  PanelLeftClose, PanelLeftOpen, FileText, Building2, Scale, ShieldCheck, Crown,
 } from 'lucide-react';
 
+const ALL_STAFF = ['super_admin', 'admin', 'officer', 'accountant', 'grantor'];
+
 const adminNav = [
-  { to: '/admin',             label: 'Overview',     icon: LayoutDashboard, exact: true, roles: ['admin', 'officer', 'accountant'] },
-  { to: '/admin/members',     label: 'Members',      icon: Users, roles: ['admin', 'officer', 'accountant'] },
-  { to: '/admin/organisations', label: 'Organisations', icon: Building2, roles: ['admin', 'officer', 'accountant'] },
-  { to: '/admin/loans',       label: 'Loans',        icon: HandCoins, roles: ['admin', 'officer', 'accountant'] },
-  { to: '/admin/store',       label: 'Store',        icon: Store, roles: ['admin', 'officer'] },
-  { to: '/admin/dividends',   label: 'Dividends',    icon: TrendingUp, roles: ['admin', 'accountant'] },
-  { to: '/admin/transactions', label: 'Transactions', icon: Receipt, roles: ['admin', 'accountant'] },
-  { to: '/admin/reports', label: 'Reports', icon: FileText, roles: ['admin', 'officer', 'accountant'] },
-  { to: '/admin/reconcile', label: 'Reconcile', icon: Scale, roles: ['admin', 'accountant'] },
-  { to: '/admin/activity',    label: 'Activity Log', icon: ScrollText, roles: ['admin', 'officer', 'accountant'] },
-  { to: '/admin/notices',     label: 'Notices',      icon: Megaphone, roles: ['admin', 'officer'] },
+  { to: '/admin',             label: 'Overview',     icon: LayoutDashboard, exact: true, roles: [...ALL_STAFF] },
+  { to: '/admin/members',     label: 'Members',      icon: Users, roles: ['super_admin', 'admin', 'officer', 'accountant'] },
+  { to: '/admin/staff',       label: 'Staff',        icon: Crown, roles: ['super_admin'] },
+  { to: '/admin/organisations', label: 'Organisations', icon: Building2, roles: ['super_admin', 'admin', 'officer', 'accountant'] },
+  { to: '/admin/loans',       label: 'Loans',        icon: HandCoins, roles: [...ALL_STAFF] },
+  { to: '/admin/store',       label: 'Store',        icon: Store, roles: ['super_admin', 'admin', 'officer'] },
+  { to: '/admin/dividends',   label: 'Dividends',    icon: TrendingUp, roles: ['super_admin', 'admin', 'accountant'] },
+  { to: '/admin/transactions', label: 'Transactions', icon: Receipt, roles: ['super_admin', 'admin', 'accountant'] },
+  { to: '/admin/reports', label: 'Reports', icon: FileText, roles: ['super_admin', 'admin', 'officer', 'accountant'] },
+  { to: '/admin/compliance', label: 'Compliance', icon: ShieldCheck, roles: ['super_admin', 'admin', 'officer', 'accountant'] },
+  { to: '/admin/reconcile', label: 'Reconcile', icon: Scale, roles: ['super_admin', 'admin', 'accountant'] },
+  { to: '/admin/activity',    label: 'Activity Log', icon: ScrollText, roles: [...ALL_STAFF] },
+  { to: '/admin/notices',     label: 'Notices',      icon: Megaphone, roles: ['super_admin', 'admin', 'officer'] },
 ];
 
 const routeTitles = {
   '/admin': 'Overview',
   '/admin/members': 'Members',
+  '/admin/staff': 'Staff',
   '/admin/organisations': 'Organisations',
   '/admin/loans': 'Loans',
   '/admin/store': 'Store',
   '/admin/dividends': 'Dividends',
   '/admin/transactions': 'Transactions',
   '/admin/reports': 'Reports',
+  '/admin/compliance': 'Compliance',
   '/admin/reconcile': 'Reconcile',
   '/admin/activity': 'Activity Log',
   '/admin/notices': 'Notices',
@@ -246,6 +253,7 @@ export default function AdminLayout() {
             </div>
           </main>
         </div>
+        <ChatWidget />
       </div>
     </TooltipProvider>
   );

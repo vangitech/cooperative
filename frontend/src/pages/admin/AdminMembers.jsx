@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import { api, download } from '@/lib/api';
 import { formatCurrency, formatDate, initials } from '@/lib/format';
@@ -14,7 +15,8 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem,
   DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { MoreHorizontal, Search, UserX, UserCheck, Shield, ShieldOff, Wallet, Landmark } from 'lucide-react';
+import { MoreHorizontal, Search, UserX, UserCheck, Shield, ShieldOff, Wallet, Landmark, MailCheck } from 'lucide-react';
+import { useAuth } from '@/context/AuthContext';
 import {
   Dialog, DialogContent, DialogFooter,
   DialogHeader, DialogTitle,
@@ -24,6 +26,8 @@ import { Textarea } from '@/components/ui/textarea';
 import OnboardDialog from '@/components/OnboardDialog';
 
 export default function AdminMembers() {
+  const { user } = useAuth();
+  const isSuper = user?.role === 'super_admin';
   const [users, setUsers] = useState(null);
   const [q, setQ] = useState('');
   const [fundTarget, setFundTarget] = useState(null);
@@ -32,9 +36,22 @@ export default function AdminMembers() {
   const [assignTarget, setAssignTarget] = useState(null);
   const [assignNin, setAssignNin] = useState('');
   const [assignBvn, setAssignBvn] = useState('');
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const load = () => api.get('/admin/users').then(setUsers).catch((e) => toast.error(e.message));
   useEffect(() => { load(); }, []);
+
+  // Deep link from Reconcile suspense (member_drift → Top up).
+  useEffect(() => {
+    const fundId = searchParams.get('fund');
+    if (fundId && users) {
+      const target = users.find((x) => String(x.id) === String(fundId));
+      if (target) {
+        setFundTarget(target); setFundAmount(''); setFundNote(`Suspense ${fundId} correction — `);
+        setSearchParams({}, { replace: true });
+      }
+    }
+  }, [users]);
 
   const changeStatus = async (u, status) => {
     try {
@@ -45,6 +62,7 @@ export default function AdminMembers() {
   };
 
   const changeRole = async (u, role) => {
+    if (!isSuper) return toast.error('Only the super-admin can assign roles — see Admin → Staff.');
     try {
       await api.patch(`/admin/users/${u.id}/role`, { role });
       toast.success(`${u.first_name} is now ${role}`);
@@ -66,6 +84,14 @@ export default function AdminMembers() {
       } else {
         toast.success(`KYC rejected for ${u.first_name}`);
       }
+      load();
+    } catch (e) { toast.error(e.message); }
+  };
+
+  const verifyEmail = async (u) => {
+    try {
+      await api.patch(`/admin/users/${u.id}/verify-email`);
+      toast.success(`${u.email} marked verified`);
       load();
     } catch (e) { toast.error(e.message); }
   };
@@ -177,15 +203,20 @@ export default function AdminMembers() {
                 <TableCell className="text-right font-medium">{formatCurrency(u.balance)}</TableCell>
                 <TableCell className="text-right hidden lg:table-cell">{formatCurrency(u.total_savings)}</TableCell>
                 <TableCell>
-                  <Select value={u.role} onValueChange={(v) => changeRole(u, v)}>
-                    <SelectTrigger className="h-8 w-32"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="member">Member</SelectItem>
-                      <SelectItem value="officer">Officer</SelectItem>
-                      <SelectItem value="accountant">Accountant</SelectItem>
-                      <SelectItem value="admin">Admin</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  {isSuper ? (
+                    <Select value={u.role} onValueChange={(v) => changeRole(u, v)}>
+                      <SelectTrigger className="h-8 w-36"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="member">Member</SelectItem>
+                        <SelectItem value="grantor">Grantor</SelectItem>
+                        <SelectItem value="officer">Officer</SelectItem>
+                        <SelectItem value="accountant">Accountant</SelectItem>
+                        <SelectItem value="admin">Admin</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <Badge variant="outline" className="capitalize">{u.role.replace('_', ' ')}</Badge>
+                  )}
                 </TableCell>
                 <TableCell>
                   <Badge variant={u.status === 'active' ? 'success' : 'destructive'} className="capitalize">
@@ -196,6 +227,9 @@ export default function AdminMembers() {
                       KYC: {u.kyc_status}
                     </Badge>
                   )}
+                  <Badge variant={u.email_verified ? 'success' : 'warning'} className="ml-1">
+                    {u.email_verified ? 'Email ✓' : 'Email?'}
+                  </Badge>
                 </TableCell>
                 <TableCell>
                   <DropdownMenu>
@@ -236,6 +270,9 @@ export default function AdminMembers() {
                           <DropdownMenuItem onClick={() => changeRole(u, 'accountant')}>
                             <Shield className="h-4 w-4" /> Make Accountant
                           </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => changeRole(u, 'grantor')}>
+                            <Shield className="h-4 w-4" /> Make Grantor
+                          </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => changeRole(u, 'admin')}>
                             <Shield className="h-4 w-4" /> Promote to Admin
                           </DropdownMenuItem>
@@ -243,6 +280,11 @@ export default function AdminMembers() {
                       ) : (
                         <DropdownMenuItem onClick={() => changeRole(u, 'member')}>
                           <ShieldOff className="h-4 w-4" /> Demote to Member
+                        </DropdownMenuItem>
+                      )}
+                      {!u.email_verified && (
+                        <DropdownMenuItem onClick={() => verifyEmail(u)}>
+                          <MailCheck className="h-4 w-4" /> Mark email verified
                         </DropdownMenuItem>
                       )}
                       <DropdownMenuItem onClick={() => { setFundTarget(u); setFundAmount(''); setFundNote(''); }}>

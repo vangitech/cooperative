@@ -11,7 +11,7 @@ export async function authenticate(req, res, next) {
 
     const payload = jwt.verify(token, process.env.JWT_SECRET);
     const { rows } = await query(
-      'SELECT id, first_name, last_name, email, role, status FROM users WHERE id = $1',
+      'SELECT id, first_name, last_name, email, role, status, email_verified FROM users WHERE id = $1',
       [payload.id]
     );
     if (!rows[0]) return res.status(401).json({ message: 'User not found' });
@@ -27,8 +27,27 @@ export async function authenticate(req, res, next) {
   }
 }
 
+// R3: verified email gates money-out. Staff bypass nothing — everyone with an
+// unverified email is blocked from withdrawals, transfers and bank payouts
+// until verified (grandfathered actives are backfilled true on migrate).
+export async function requireVerifiedEmail(req, res, next) {
+  try {
+    const { rows } = await query('SELECT email_verified FROM users WHERE id = $1', [req.user.id]);
+    if (!rows[0]?.email_verified) {
+      audit(req, 'auth.withdrawal_blocked_unverified', 'user', req.user.id,
+        { path: req.originalUrl }, { outcome: 'failure' });
+      return res.status(403).json({
+        message: 'Verify your email before moving money out. Check your inbox for the code or contact support.',
+      });
+    }
+    next();
+  } catch {
+    return res.status(500).json({ message: 'Verification check failed' });
+  }
+}
+
 export function requireAdmin(req, res, next) {
-  if (req.user?.role !== 'admin')
+  if (!['admin', 'super_admin'].includes(req.user?.role))
     return res.status(403).json({ message: 'Admin access required' });
   next();
 }

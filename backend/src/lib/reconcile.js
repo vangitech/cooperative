@@ -71,8 +71,13 @@ export async function runReconciliation(client, { actorId = null, channel = 'web
   // 5. Per-member proof: every wallet must equal its implied transaction
   // history. This is what guarantees every member exists correctly in the
   // books — any drift (deleted rows, manual edits, missed postings) files here.
+  // NOTE (R1): manual savings deposits are external inflows, but recurring
+  // plan runs are wallet→savings encumbrances (outflows). They used to share
+  // the 'savings' type (root cause of member_drift#3); plan runs now post as
+  // 'savings_plan'. Both spellings are classified explicitly — unknown types
+  // still file member_unknown_tx so new movements can never drift silently.
   const IN_TYPES = ['deposit', 'savings', 'dividend', 'loan_disbursement', 'fixed_maturity', 'refund', 'fixed_break', 'transfer_in'];
-  const OUT_TYPES = ['withdrawal', 'loan_repayment', 'fixed_deposit', 'transfer_out', 'collection_repayment', 'collection_down'];
+  const OUT_TYPES = ['withdrawal', 'loan_repayment', 'fixed_deposit', 'transfer_out', 'collection_repayment', 'collection_down', 'savings_plan'];
   const ALL_TYPES = [...IN_TYPES, ...OUT_TYPES];
   const members = await client.query(
     `SELECT u.id, u.email, COALESCE(w.balance,0) AS wallet,

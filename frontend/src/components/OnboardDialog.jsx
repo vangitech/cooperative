@@ -244,7 +244,7 @@ export default function OnboardDialog({ onDone }) {
                     </p>
                   ))}
                 </div>
-                {user?.role === 'admin' && (
+                {['admin', 'super_admin'].includes(user?.role) && (
                   <label className="col-span-2 flex items-center gap-2 text-sm">
                     <input type="checkbox" checked={form.autoApproveKyc} onChange={(e) => setForm({ ...form, autoApproveKyc: e.target.checked })} />
                     Auto-approve KYC if system checks pass

@@ -1,9 +1,11 @@
 import express from 'express';
-import { query, withTransaction } from '../db.js';
+import { query, pool, withTransaction } from '../db.js';
 import { authenticate } from '../middleware/auth.js';
 import { generateRef, isPositiveNumber, toMoney, asyncHandler } from '../utils/helpers.js';
 import { audit, auditTx } from '../lib/audit.js';
 import { postJournal } from '../lib/ledger.js';
+import { borrowerOrg, orgGrantors, usersInRoles, recordReview, notifyMany } from '../lib/loanflow.js';
+import { notify } from '../lib/notify.js';
 import {
   ensureSchedules,
   assessPenalties,
@@ -91,6 +93,43 @@ router.post(
         [req.user.id, amt, rate, months, purpose || null, total, product.id]
       );
       audit(req, 'loan.applied', 'loan', rows[0].id, { amount: amt, product: product.name });
+
+      // Maker-checker kickoff: the grantor(s) of the borrower's organisation
+      // (e.g. a private-sector member under Wuse Market → Wuse Market
+      // grantors) must approve before any officer touches the file.
+      try {
+        const org = await borrowerOrg(pool, req.user.id);
+        const loan = rows[0];
+        await query(
+          `INSERT INTO loan_reviews (loan_id, stage, reviewer_id, action, note, metadata)
+           VALUES ($1,'applied',$2,'applied',NULL,$3)`,
+          [loan.id, req.user.id, JSON.stringify({ product: product.name, org: org?.code || null })]
+        );
+        if (org) {
+          const grantors = await orgGrantors(pool, org.id);
+          if (grantors.length) {
+            notifyMany(grantors.map((g) => g.id), {
+              title: 'New loan application needs grantor approval',
+              body: `${req.user.first_name} ${req.user.last_name} applied for ${amt} (${product.name}) under ${org.name}. Open Admin → Loans to approve.`,
+              link: '/admin/loans',
+            });
+          } else {
+            const supers = await usersInRoles(pool, ['super_admin']);
+            notifyMany(supers.map((s) => s.id), {
+              title: 'Loan has no grantor — action needed',
+              body: `Loan #${loan.id} (${amt}) under ${org.name} has no grantor assigned. Assign a grantor or super-admin override.`,
+              link: '/admin/loans',
+            });
+          }
+        }
+        notify(req.user.id, {
+          title: 'Loan application received',
+          body: `Your ${amt} application (${product.name}) is awaiting grantor approval.`,
+          link: '/loans',
+        });
+      } catch (e) {
+        console.error('loan grantor notify failed:', e.message);
+      }
       res.status(201).json(rows[0]);
     } catch (e) {
       console.error(e);

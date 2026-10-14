@@ -615,3 +615,112 @@ DO $$ BEGIN
     ALTER TABLE dividends ADD CONSTRAINT dividends_period_user_unique UNIQUE (period, user_id);
   END IF;
 END $$;
+
+-- Compliance & regulations vault: PCI-DSS, ISO, financial audit, licences.
+-- Upload the certificate/licence (base64 → BYTEA like kyc_documents); the
+-- system logs issue/renewed date + expiry date and derives days_left/status.
+-- A daily check notifies staff from 60 days out with a live countdown.
+CREATE TABLE IF NOT EXISTS compliance_documents (
+  id SERIAL PRIMARY KEY,
+  title VARCHAR(200) NOT NULL,
+  doc_type VARCHAR(40) NOT NULL DEFAULT 'other',
+  issuer VARCHAR(160),
+  license_no VARCHAR(100),
+  filename VARCHAR(255),
+  mime VARCHAR(100),
+  size_bytes INTEGER,
+  data BYTEA,
+  issue_date DATE,
+  renewed_date DATE,
+  expiry_date DATE NOT NULL,
+  notes TEXT,
+  last_reminded_at DATE,
+  uploaded_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_compliance_expiry ON compliance_documents(expiry_date);
+CREATE INDEX IF NOT EXISTS idx_compliance_type ON compliance_documents(doc_type);
+
+-- Member/staff chat: direct (admin, officer, grantor, peer) + group (org).
+-- Polling-based MVP — no socket dependency; messages are append-only.
+CREATE TABLE IF NOT EXISTS chat_conversations (
+  id SERIAL PRIMARY KEY,
+  type VARCHAR(20) NOT NULL DEFAULT 'direct',
+  title VARCHAR(200),
+  org_id INTEGER REFERENCES organisations(id) ON DELETE SET NULL,
+  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS chat_participants (
+  id SERIAL PRIMARY KEY,
+  conversation_id INTEGER NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(conversation_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_chat_part_user ON chat_participants(user_id);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id SERIAL PRIMARY KEY,
+  conversation_id INTEGER NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+  sender_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  body TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_chat_msg_conv ON chat_messages(conversation_id, created_at);
+
+ALTER TABLE public.compliance_documents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.chat_conversations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.chat_participants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.chat_messages ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.compliance_documents FROM anon, authenticated;
+REVOKE ALL ON TABLE public.chat_conversations FROM anon, authenticated;
+REVOKE ALL ON TABLE public.chat_participants FROM anon, authenticated;
+REVOKE ALL ON TABLE public.chat_messages FROM anon, authenticated;
+
+-- R3: verified email gates money-out. Staged self-registration verifies by
+-- code before completion; staff-assisted onboarding starts unverified.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT false;
+
+-- Wuse Market branch (private-sector loan story: member under Wuse Market).
+INSERT INTO organisations (name, code, type, status)
+VALUES ('Wuse Market', 'WUSE-MKT', 'market', 'active')
+ON CONFLICT (code) DO NOTHING;
+
+-- Loan maker-checker: grantor → account officer (KYC) → accountant (disburse).
+-- Status chain: pending → grantor_approved → kyc_verified → disbursed
+-- (rejected anytime; kyc_failed returns to the officer queue for retry).
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS grantor_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS grantor_note TEXT;
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS grantor_at TIMESTAMPTZ;
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS officer_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS kyc_status VARCHAR(20) NOT NULL DEFAULT 'unchecked';
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS kyc_result JSONB;
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS kyc_note TEXT;
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS kyc_checked_at TIMESTAMPTZ;
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS pushed_at TIMESTAMPTZ;
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS pushed_by INTEGER REFERENCES users(id) ON DELETE SET NULL;
+
+CREATE TABLE IF NOT EXISTS loan_reviews (
+  id SERIAL PRIMARY KEY,
+  loan_id INTEGER NOT NULL REFERENCES loans(id) ON DELETE CASCADE,
+  stage VARCHAR(20) NOT NULL,
+  reviewer_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  action VARCHAR(20) NOT NULL,
+  note TEXT,
+  metadata JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_loan_reviews_loan ON loan_reviews(loan_id, created_at);
+
+-- R1 (part 1): recurring plan savings are wallet→savings encumbrances
+-- (outflow), unlike manual savings deposits (external inflow). They shared
+-- the 'savings' type, so the member proof overstated history for plan
+-- members (root cause of member_drift#3 on member@mpcs). Split the type.
+UPDATE transactions SET type = 'savings_plan'
+WHERE type = 'savings' AND description LIKE 'Recurring savings%';
+
+ALTER TABLE public.loan_reviews ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.loan_reviews FROM anon, authenticated;

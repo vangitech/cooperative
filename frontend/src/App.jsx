@@ -18,6 +18,7 @@ const Loans = lazy(() => import('@/pages/Loans'));
 const Dividends = lazy(() => import('@/pages/Dividends'));
 const Profile = lazy(() => import('@/pages/Profile'));
 const Market = lazy(() => import('@/pages/Market'));
+const Statement = lazy(() => import('@/pages/Statement'));
 
 const AdminDashboard = lazy(() => import('@/pages/admin/AdminDashboard'));
 const AdminMembers = lazy(() => import('@/pages/admin/AdminMembers'));
@@ -30,6 +31,8 @@ const AdminNotices = lazy(() => import('@/pages/admin/AdminNotices'));
 const AdminReports = lazy(() => import('@/pages/admin/AdminReports'));
 const AdminOrgs = lazy(() => import('@/pages/admin/AdminOrgs'));
 const AdminReconcile = lazy(() => import('@/pages/admin/AdminReconcile'));
+const AdminCompliance = lazy(() => import('@/pages/admin/AdminCompliance'));
+const AdminStaff = lazy(() => import('@/pages/admin/AdminStaff'));
 
 function PageFallback() {
   return (
@@ -60,6 +63,7 @@ export default function App() {
               <Route path="/dividends" element={<Dividends />} />
               <Route path="/profile" element={<Profile />} />
               <Route path="/market" element={<Market />} />
+              <Route path="/statement" element={<Statement />} />
             </Route>
 
             {/* Admin console — separate shadcn layout */}
@@ -69,6 +73,7 @@ export default function App() {
             >
               <Route index element={<AdminDashboard />} />
               <Route path="members" element={<AdminMembers />} />
+              <Route path="staff" element={<AdminStaff />} />
               <Route path="loans" element={<AdminLoans />} />
               <Route path="dividends" element={<AdminDividends />} />
               <Route path="transactions" element={<AdminTransactions />} />
@@ -76,6 +81,7 @@ export default function App() {
               <Route path="store" element={<AdminStore />} />
               <Route path="notices" element={<AdminNotices />} />
               <Route path="reports" element={<AdminReports />} />
+              <Route path="compliance" element={<AdminCompliance />} />
               <Route path="organisations" element={<AdminOrgs />} />
               <Route path="reconcile" element={<AdminReconcile />} />
             </Route>
