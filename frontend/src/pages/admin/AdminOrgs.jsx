@@ -14,7 +14,7 @@ import {
   Dialog, DialogContent, DialogFooter,
   DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
-import { Building2, Plus, Users, Crown, UserPlus, UserMinus, ChevronDown, ChevronRight, ArrowRightLeft } from 'lucide-react';
+import { Building2, Plus, Users, Crown, UserPlus, UserMinus, ChevronDown, ChevronRight, ArrowRightLeft, Pencil, Trash2 } from 'lucide-react';
 
 import { useAuth } from '@/context/AuthContext';
 
@@ -49,6 +49,11 @@ export default function AdminOrgs() {
   const [moveTarget, setMoveTarget] = useState(null); // member row being moved
   const [moveOrgId, setMoveOrgId] = useState('');
   const [q, setQ] = useState('');
+  // Seat dialog: seat a new grantor (phone required, email optional) or
+  // edit an existing seat's official contact.
+  const [seatTarget, setSeatTarget] = useState(null); // { member } or { seat, isEdit }
+  const [seatPhone, setSeatPhone] = useState('');
+  const [seatEmail, setSeatEmail] = useState('');
 
   const toggle = (id) => setExpanded((e) => ({ ...e, [id]: !(e[id] ?? true) }));
 
@@ -101,12 +106,49 @@ export default function AdminOrgs() {
     } catch (e) { toast.error(e.message); }
   };
 
-  const seatGrantor = async (member) => {
+  const openSeat = (member) => {
+    setSeatTarget({ member });
+    setSeatPhone(member.phone || '');
+    setSeatEmail('');
+  };
+
+  const openSeatEdit = (seat) => {
+    setSeatTarget({ seat, isEdit: true });
+    setSeatPhone(seat.contact_phone || seat.phone || '');
+    setSeatEmail(seat.contact_email || '');
+  };
+
+  const submitSeat = async () => {
+    if (!seatTarget || !seatPhone.trim()) return;
     try {
-      await api.post(`/orgs/${membersOrg.id}/grantors`, { userId: member.id });
-      toast.success(`${member.first_name} ${member.last_name} seated as union grantor`);
-      viewMembers(membersOrg);
-      if (grantorsOrg?.id === membersOrg.id) viewGrantors(grantorsOrg);
+      if (seatTarget.isEdit) {
+        await api.patch(`/orgs/${grantorsOrg.id}/grantors/${seatTarget.seat.id}`, {
+          phone: seatPhone.trim(),
+          email: seatEmail.trim() || null,
+        });
+        toast.success('Grantor contact updated');
+      } else {
+        await api.post(`/orgs/${membersOrg.id}/grantors`, {
+          userId: seatTarget.member.id,
+          phone: seatPhone.trim(),
+          email: seatEmail.trim() || undefined,
+        });
+        toast.success(`${seatTarget.member.first_name} ${seatTarget.member.last_name} seated as union grantor`);
+        viewMembers(membersOrg);
+      }
+      setSeatTarget(null);
+      if (membersOrg) viewMembers(membersOrg);
+      if (grantorsOrg) viewGrantors(grantorsOrg);
+      load();
+    } catch (e) { toast.error(e.message); }
+  };
+
+  const deleteOrg = async (o) => {
+    if (!window.confirm(`Delete ${o.name} (${o.code}) permanently? Only empty, never-used organisations can be deleted.`)) return;
+    try {
+      await api.del(`/orgs/${o.id}`);
+      toast.success(`${o.name} deleted`);
+      load();
     } catch (e) { toast.error(e.message); }
   };
 
@@ -201,6 +243,11 @@ export default function AdminOrgs() {
               <Crown className="h-4 w-4" />
             </Button>
             <Button variant="ghost" size="sm" onClick={() => openEdit(o)}>Edit</Button>
+            {canSeat && (
+              <Button variant="ghost" size="sm" className="text-destructive" title="Delete (only empty, never-used)" onClick={() => deleteOrg(o)}>
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            )}
           </div>
         </TableCell>
       </TableRow>
@@ -355,7 +402,7 @@ export default function AdminOrgs() {
                             {m.role && m.role !== 'member' && (
                               <Badge variant="outline" className="capitalize text-[10px]">{m.role.replace('_', ' ')}</Badge>
                             )}
-                            <Button variant="ghost" size="sm" title="Seat as union grantor (must be fully registered)" onClick={() => seatGrantor(m)}>
+                            <Button variant="ghost" size="sm" title="Seat as union grantor (must be fully registered)" onClick={() => openSeat(m)}>
                               <UserPlus className="h-4 w-4" />
                             </Button>
                             <Button variant="ghost" size="sm" title="Move to another union" onClick={() => { setMoveTarget(m); setMoveOrgId(''); }}>
@@ -395,8 +442,9 @@ export default function AdminOrgs() {
                   <TableRow>
                     <TableHead>Grantor</TableHead>
                     <TableHead>Member ID</TableHead>
+                    <TableHead className="hidden md:table-cell">Union contact</TableHead>
                     <TableHead className="hidden md:table-cell">Seated</TableHead>
-                    {canSeat && <TableHead className="w-12"></TableHead>}
+                    {canSeat && <TableHead className="w-20"></TableHead>}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -407,14 +455,23 @@ export default function AdminOrgs() {
                         <p className="text-xs text-muted-foreground">{g.email}</p>
                       </TableCell>
                       <TableCell className="font-mono text-xs">{g.member_no}</TableCell>
+                      <TableCell className="hidden md:table-cell text-xs">
+                        <p className="font-medium">{g.contact_phone || g.phone || '—'}</p>
+                        <p className="text-muted-foreground">{g.contact_email || 'no union email'}</p>
+                      </TableCell>
                       <TableCell className="hidden md:table-cell text-xs text-muted-foreground">
                         {g.assigned_at?.slice(0, 10)}{g.assigned_by_first ? ` by ${g.assigned_by_first} ${g.assigned_by_last || ''}` : ''}
                       </TableCell>
                       {canSeat && (
                         <TableCell>
-                          <Button variant="ghost" size="sm" className="text-destructive" title="Remove seat" onClick={() => unseatGrantor(g)}>
-                            <UserMinus className="h-4 w-4" />
-                          </Button>
+                          <div className="flex gap-1">
+                            <Button variant="ghost" size="sm" title="Edit union contact" onClick={() => openSeatEdit(g)}>
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button variant="ghost" size="sm" className="text-destructive" title="Remove seat" onClick={() => unseatGrantor(g)}>
+                              <UserMinus className="h-4 w-4" />
+                            </Button>
+                          </div>
                         </TableCell>
                       )}
                     </TableRow>
@@ -451,6 +508,32 @@ export default function AdminOrgs() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setMoveTarget(null)}>Cancel</Button>
             <Button disabled={!moveOrgId} onClick={submitMove}>Move member</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!seatTarget} onOpenChange={(v) => { if (!v) setSeatTarget(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {seatTarget?.isEdit
+                ? `Union contact — ${seatTarget.seat.first_name} ${seatTarget.seat.last_name}`
+                : `Seat grantor — ${seatTarget?.member.first_name} ${seatTarget?.member.last_name}`}
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Official union contact for this leader. Phone is required; email is optional
+            {!seatTarget?.isEdit && seatTarget?.member.phone && (
+              <> (member phone <span className="font-mono">{seatTarget.member.phone}</span> pre-filled)</>
+            )}.
+          </p>
+          <div><Label>Contact phone *</Label><Input required value={seatPhone} onChange={(e) => setSeatPhone(e.target.value)} placeholder="0803…" /></div>
+          <div><Label>Contact email (optional)</Label><Input type="email" value={seatEmail} onChange={(e) => setSeatEmail(e.target.value)} placeholder="union@example.com" /></div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSeatTarget(null)}>Cancel</Button>
+            <Button disabled={!seatPhone.trim()} onClick={submitSeat}>
+              {seatTarget?.isEdit ? 'Save contact' : 'Seat grantor'}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

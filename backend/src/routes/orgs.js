@@ -79,19 +79,25 @@ router.get(
     const org = await query('SELECT id, name, code FROM organisations WHERE id = $1', [req.params.id]);
     if (!org.rows[0]) return res.status(404).json({ message: 'Organisation not found' });
     let rows = [];
+    const baseSelect = (extra) => `
+        SELECT g.user_id AS id, u.first_name, u.last_name, u.email, u.phone, u.status,
+               u.member_no, g.assigned_at, ${extra}
+               a.first_name AS assigned_by_first, a.last_name AS assigned_by_last
+        FROM org_grantors g
+        JOIN users u ON u.id = g.user_id
+        LEFT JOIN users a ON a.id = g.assigned_by
+        WHERE g.org_id = $1 ORDER BY g.assigned_at`;
     try {
-      ({ rows } = await query(
-        `SELECT g.user_id AS id, u.first_name, u.last_name, u.email, u.phone, u.status,
-                u.member_no, g.assigned_at,
-                a.first_name AS assigned_by_first, a.last_name AS assigned_by_last
-         FROM org_grantors g
-         JOIN users u ON u.id = g.user_id
-         LEFT JOIN users a ON a.id = g.assigned_by
-         WHERE g.org_id = $1 ORDER BY g.assigned_at`,
-        [req.params.id]
-      ));
+      ({ rows } = await query(baseSelect('g.contact_phone, g.contact_email,'), [req.params.id]));
     } catch (e) {
-      if (!/relation .* does not exist|undefined_table/.test(String(e.message))) throw e;
+      const msg = String(e.message);
+      if (/relation .* does not exist|undefined_table/.test(msg)) {
+        rows = []; // pre-migration DB: no seats table yet
+      } else if (/column .* does not exist|undefined_column/.test(msg)) {
+        ({ rows } = await query(baseSelect(''), [req.params.id])); // table without contact columns
+      } else {
+        throw e;
+      }
     }
     res.json({ org: org.rows[0], seats: 3, grantors: rows });
   })
@@ -104,7 +110,7 @@ router.post(
     try {
       if (!['admin', 'super_admin'].includes(req.user.role))
         return res.status(403).json({ message: 'Only admins can assign union grantors' });
-      const { userId } = req.body || {};
+      const { userId, phone, email } = req.body || {};
       if (!userId) return res.status(400).json({ message: 'userId is required' });
 
       const org = await query('SELECT id, name FROM organisations WHERE id = $1 AND status = $2', [
@@ -116,7 +122,7 @@ router.post(
       // primary member, verified identity (NIN/BVN snapshot) + address
       // documents uploaded.
       const cand = await query(
-        `SELECT u.id, u.first_name, u.last_name, u.email, u.role, u.status,
+        `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.role, u.status,
                 k.id_number, k.bvn_verified,
                 (SELECT COUNT(*) FROM kyc_documents d WHERE d.user_id = u.id) AS docs
          FROM users u
@@ -140,15 +146,38 @@ router.post(
       if (Number(seats.rows[0].count) >= 3)
         return res.status(409).json({ message: `${org.rows[0].name} already has 3 grantors — remove one first` });
 
+      // Seat contact: official union phone (required) + email (optional).
+      // Defaults to the member's own details when not supplied.
+      const contactPhone = String(phone || '').trim() || c.phone || null;
+      if (!contactPhone)
+        return res.status(400).json({ message: 'A contact phone is required for the grantor seat' });
+      const contactEmail = String(email || '').trim() || null;
+      if (contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail))
+        return res.status(400).json({ message: 'Contact email is invalid' });
+
+      let seat = null;
+      try {
+        ({ rows: seat } = await query(
+          `INSERT INTO org_grantors (org_id, user_id, assigned_by, contact_phone, contact_email)
+           VALUES ($1,$2,$3,$4,$5) ON CONFLICT (org_id, user_id) DO NOTHING RETURNING *`,
+          [req.params.id, userId, req.user.id, contactPhone, contactEmail]
+        ));
+      } catch (e) {
+        // Stale DB without the contact columns: seat without contacts.
+        if (/column .* does not exist|undefined_column/.test(String(e.message))) {
+          ({ rows: seat } = await query(
+            `INSERT INTO org_grantors (org_id, user_id, assigned_by)
+             VALUES ($1,$2,$3) ON CONFLICT (org_id, user_id) DO NOTHING RETURNING *`,
+            [req.params.id, userId, req.user.id]
+          ));
+        } else {
+          throw e;
+        }
+      }
       await query('UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2', ['grantor', userId]);
-      const { rows } = await query(
-        `INSERT INTO org_grantors (org_id, user_id, assigned_by)
-         VALUES ($1,$2,$3) ON CONFLICT (org_id, user_id) DO NOTHING RETURNING *`,
-        [req.params.id, userId, req.user.id]
-      );
       audit(req, 'org.grantor_assigned', 'organisation', req.params.id,
-        { userId: Number(userId), org: org.rows[0].name });
-      res.status(201).json({ ok: true, seat: rows[0] || null });
+        { userId: Number(userId), org: org.rows[0].name, contactPhone, contactEmail });
+      res.status(201).json({ ok: true, seat: seat[0] || null });
     } catch (e) {
       if (/relation .* does not exist|undefined_table/.test(String(e.message))) {
         return res.status(400).json({ message: 'Grantor seats need a migration — run npm run migrate' });
@@ -176,6 +205,48 @@ router.delete(
     }
     audit(req, 'org.grantor_removed', 'organisation', req.params.id, { userId: Number(req.params.userId) });
     res.json({ ok: true });
+  })
+);
+
+// Edit a seated grantor's official contact (phone required, email optional).
+router.patch(
+  '/:id/grantors/:userId',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    if (!['admin', 'super_admin'].includes(req.user.role))
+      return res.status(403).json({ message: 'Only admins can edit union grantors' });
+    const { phone, email } = req.body || {};
+    const sets = [];
+    const params = [];
+    if (phone !== undefined) {
+      const clean = String(phone).trim();
+      if (!clean) return res.status(400).json({ message: 'Contact phone cannot be empty' });
+      params.push(clean);
+      sets.push(`contact_phone = $${params.length}`);
+    }
+    if (email !== undefined) {
+      const clean = String(email).trim() || null;
+      if (clean && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean))
+        return res.status(400).json({ message: 'Contact email is invalid' });
+      params.push(clean);
+      sets.push(`contact_email = $${params.length}`);
+    }
+    if (!sets.length) return res.status(400).json({ message: 'Nothing to update' });
+    try {
+      params.push(req.params.id, req.params.userId);
+      const { rows } = await query(
+        `UPDATE org_grantors SET ${sets.join(', ')} WHERE org_id = $${params.length - 1} AND user_id = $${params.length} RETURNING *`,
+        params
+      );
+      if (!rows[0]) return res.status(404).json({ message: 'Grantor seat not found' });
+      audit(req, 'org.grantor_updated', 'organisation', req.params.id, { userId: Number(req.params.userId) });
+      res.json({ ok: true, seat: rows[0] });
+    } catch (e) {
+      if (/column .* does not exist|undefined_column|relation .* does not exist|undefined_table/.test(String(e.message))) {
+        return res.status(400).json({ message: 'Grantor contacts need a migration — run npm run migrate' });
+      }
+      throw e;
+    }
   })
 );
 
@@ -334,6 +405,56 @@ router.patch(
     audit(req, 'org.updated', 'organisation', rows[0].id, { name: rows[0].name },
       { before: before.rows[0], after: rows[0] });
     res.json(rows[0]);
+  })
+);
+
+// Delete an organisation (or union). Deliberately narrow, like member
+// delete: only orgs with ZERO membership history and ZERO grantor seats
+// (mistyped/empty rows, never lived-in unions). Member numbers embed the
+// code and journals carry org attribution, so anything ever used is
+// blocked — deactivate it instead. Admin / super-admin only, audited.
+router.delete(
+  '/:id',
+  authenticate,
+  asyncHandler(async (req, res) => {
+    if (!['admin', 'super_admin'].includes(req.user.role))
+      return res.status(403).json({ message: 'Only admins can delete organisations' });
+    try {
+      const o = await query('SELECT id, name, code FROM organisations WHERE id = $1', [req.params.id]);
+      const org = o.rows[0];
+      if (!org) return res.status(404).json({ message: 'Organisation not found' });
+      if (org.code === 'GEN')
+        return res.status(400).json({ message: 'The General Members group cannot be deleted' });
+      const mem = await query('SELECT COUNT(*) FROM organisation_members WHERE org_id = $1', [req.params.id]);
+      if (Number(mem.rows[0].count) > 0) {
+        return res.status(409).json({
+          message: `${org.name} has membership history and cannot be deleted — set it inactive instead`,
+        });
+      }
+      let seats = 0;
+      try {
+        const g = await query('SELECT COUNT(*) FROM org_grantors WHERE org_id = $1', [req.params.id]);
+        seats = Number(g.rows[0].count);
+      } catch (e) {
+        if (!/relation .* does not exist|undefined_table/.test(String(e.message))) throw e;
+      }
+      if (seats > 0) {
+        return res.status(409).json({
+          message: `${org.name} still seats grantors — remove them first`,
+        });
+      }
+      const kids = await query('SELECT COUNT(*) FROM organisations WHERE parent_id = $1', [req.params.id]);
+      if (Number(kids.rows[0].count) > 0) {
+        return res.status(409).json({
+          message: `${org.name} still has unions under it — delete or re-parent them first`,
+        });
+      }
+      await query('DELETE FROM organisations WHERE id = $1', [req.params.id]);
+      audit(req, 'org.deleted', 'organisation', req.params.id, { name: org.name, code: org.code });
+      res.json({ ok: true, id: Number(req.params.id), name: org.name });
+    } catch (e) {
+      res.status(e.status || 400).json({ message: e.message });
+    }
   })
 );
 

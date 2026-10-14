@@ -803,6 +803,12 @@ CREATE INDEX IF NOT EXISTS idx_org_grantors_org ON org_grantors(org_id);
 ALTER TABLE public.org_grantors ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.org_grantors FROM anon, authenticated;
 
+-- Seat contacts: each of the 3 union grantors carries an official contact
+-- phone (required) + email (optional) for union business — pre-filled from
+-- the member profile at seat time, editable afterwards.
+ALTER TABLE org_grantors ADD COLUMN IF NOT EXISTS contact_phone VARCHAR(30);
+ALTER TABLE org_grantors ADD COLUMN IF NOT EXISTS contact_email VARCHAR(255);
+
 -- Recurring savings cadence: daily | weekly | monthly (was monthly-only).
 -- The plan debits the wallet on each due run once funds land (runDuePlans
 -- fires opportunistically after wallet funding, plus cron).
