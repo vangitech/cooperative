@@ -325,6 +325,10 @@ router.post('/complete', authLimiter, async (req, res) => {
       // Snapshot the registry passes so KYC/dashboard can render PASSED
       // badges without re-calling the provider. Plain BVN follows the same
       // posture as the plain NIN in id_number; the intent row is wiped below.
+      // SAVEPOINT: on a stale DB without the bvn columns the first insert
+      // fails — without this the whole transaction would abort (25P02) and
+      // the fallback below could never run.
+      await client.query('SAVEPOINT kyc_snapshot');
       try {
         await client.query(
           `INSERT INTO kyc_profiles (user_id, id_type, id_number, bvn, bvn_verified, bvn_result, verification_result, status)
@@ -337,9 +341,11 @@ router.post('/complete', authLimiter, async (req, res) => {
            JSON.stringify(bvnRes),
            JSON.stringify(identity)]
         );
+        await client.query('RELEASE SAVEPOINT kyc_snapshot');
       } catch (e) {
         // Older DBs without the bvn columns: fall back to the base snapshot.
         if (/column .* does not exist|undefined_column/.test(String(e.message))) {
+          await client.query('ROLLBACK TO SAVEPOINT kyc_snapshot');
           await client.query(
             `INSERT INTO kyc_profiles (user_id, id_type, id_number, verification_result, status)
              VALUES ($1,$2,$3,$4,'pending')
