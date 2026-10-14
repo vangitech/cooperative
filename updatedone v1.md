@@ -1,7 +1,8 @@
 # Updatedone v1 — completed work tracker
 
 Done items move here from `update v1.md` with date + commit. Pending work
-stays in `update v1.md` (P4 hash-chain, L3–L5 ledger, D1–D4 dividends).
+stays in `update v1.md`: P4 (audit hash-chain) · D3/D4 (dividend specs,
+implementation pending) · A1–A5 (audit gaps) · G1–G10 (ledger 2026 gaps).
 
 ## Audit Trail Upgrade
 
@@ -43,3 +44,24 @@ Legend: ⬜ pending · 🟡 in progress · ✅ done
 |---|------|--------|------|-------|
 | S1 | Super-admin sole full rights | ✅ done | 2026-10-14 | New `super_admin` role holds `*` + exclusive `staff.manage`; `admin` downgraded to operational perms (no role grants); role changes restricted to super-admin (last-super_admin protected); Staff console (`/admin/staff`); seed via `SUPERADMIN_EMAIL/PASSWORD` on migrate or `npm run make-superadmin -- <email> <pass>`; Wuse Market org seeded |
 | L6 | Loan maker-checker grantor→officer→accountant | ✅ done | 2026-10-14 | Statuses pending→grantor_approved→kyc_verified→disbursed (+kyc_failed retry, rejected); grantor of borrower's org approves (super_admin override); officer re-runs FULL KYC live naming failed checks, messages grantor via 1:1 chat + notification, pushes to payment; accountant disburses only after push; separation of duties enforced (super_admin override logged); legacy single-step review retired (410); every stage in `loan_reviews` + audit + notifications |
+
+## Retired — Original Product Feedback (all 13 items resolved, 2026-10-14 review)
+
+Tracked here so the appendix could leave `update v1.md`. Resolved-by
+names the feature/route, not a commit (verified live in code).
+
+| # | Item (as written) | Resolution |
+|---|---|---|
+| 1 | Real money movement (Paystack/Flutterwave + webhooks) | ✅ done — Flutterwave live: payment links, bank transfers, virtual accounts, signature-verified webhooks with server-side re-verification (`payments.js`, `providers.js`, L4) |
+| 2 | Forgot/reset password | ✅ done — `POST /auth/forgot-password` + `POST /auth/reset-password` (single-use, 60-min, audited) |
+| 3 | Member approval queue (`pending` default, admin approves) | ⏭️ superseded by design — NIN/BVN registry-verified signup creates `active` members instantly (live-verified 2026-10-14); approval queues kept only for staff-created accounts and KYC documents |
+| 4 | Audit trail | ✅ done — append-only `audit_logs` + transactional money audits (P1–P3) |
+| 5 | Configurable loan products | ✅ done — `loan_products` table + admin CRUD, eligibility rules, guarantor requirements |
+| 6 | Repayment schedules + penalties | ✅ done — per-installment schedules, principal/interest split, penalties, auto-debit |
+| 7 | Interest-bearing savings / fixed deposits | ✅ done — fixed deposits with tenure + rate, maturity claim/break |
+| 8 | Statements & exports | ✅ done — member statement (JSON + CSV), admin CSV exports (members/loans/transactions), 10-report pack |
+| 9 | Notifications | ✅ done — in-app notification center + bell, money-event notifications (SMS providers not wired — carriers pending) |
+| 10 | Member-to-member transfers | ✅ done — `POST /wallet/transfer` by email/account number, instant, journalised |
+| 11 | Announcements board | ✅ done — `announcements` + admin Notices console, audience targeting |
+| 12 | Finer admin roles | ✅ done — super_admin/admin/officer/accountant/grantor + granular perms (S1) |
+| 13 | Recurring auto-deduction | ✅ done — daily/weekly/monthly `savings_plans`, auto-debit on funding, pause/resume/cancel |
