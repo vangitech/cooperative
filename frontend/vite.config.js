@@ -6,6 +6,14 @@ import tailwindcss from '@tailwindcss/vite'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // Build stamp: Vercel injects VERCEL_GIT_COMMIT_SHA at build time, so the
+  // running UI can show exactly which commit it was built from. Local builds
+  // show the git HEAD (or 'dev' when git is unavailable).
+  define: {
+    __APP_COMMIT__: JSON.stringify(
+      (process.env.VERCEL_GIT_COMMIT_SHA || '').slice(0, 7) || 'dev'
+    ),
+  },
   resolve: {
     alias: {
       '@': path.resolve(import.meta.dirname, './src'),

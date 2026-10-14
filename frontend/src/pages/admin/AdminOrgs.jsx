@@ -179,11 +179,19 @@ export default function AdminOrgs() {
   );
 
   // Hierarchy: markets on top, unions nested underneath. Member counts
-  // roll up so a market shows its whole trading community.
+  // roll up so a market shows its whole trading community. Orphans (a
+  // parent_id with no matching row) pin to the top level so no union can
+  // ever vanish from the table.
   const childrenOf = {};
+  const byId = {};
   (orgs || []).forEach((o) => {
+    byId[o.id] = o;
     const k = o.parent_id || 0;
     (childrenOf[k] = childrenOf[k] || []).push(o);
+  });
+  const roots = (childrenOf[0] || []).slice();
+  (orgs || []).forEach((o) => {
+    if (o.parent_id && !byId[o.parent_id] && !roots.includes(o)) roots.push(o);
   });
   const rolled = {};
   const rollup = (o) => {
@@ -194,6 +202,7 @@ export default function AdminOrgs() {
     return s;
   };
   (childrenOf[0] || []).forEach(rollup);
+  roots.forEach((o) => { if (rolled[o.id] === undefined) rollup(o); });
 
   const matchQ = (o) =>
     !q.trim() || `${o.name} ${o.code} ${o.type} ${o.parent_name || ''}`.toLowerCase().includes(q.toLowerCase());
@@ -350,7 +359,7 @@ export default function AdminOrgs() {
               ) : q.trim() ? (
                 (orgs || []).filter(matchQ).map((o) => orgRow(o, 0))
               ) : (
-                renderOrgRows(childrenOf[0] || [], 0)
+                renderOrgRows(roots, 0)
               )}
             </TableBody>
           </Table>

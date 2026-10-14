@@ -1,3 +1,4 @@
+/* global __APP_COMMIT__ */
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
@@ -78,6 +79,11 @@ function SidebarContent({ nav, collapsed, onNavigate }) {
           ))}
         </nav>
       </ScrollArea>
+      {!collapsed && (
+        <p className="px-5 py-2 font-mono text-[10px] text-muted-foreground/70" title="Deployed build">
+          build {typeof __APP_COMMIT__ !== 'undefined' ? __APP_COMMIT__ : 'dev'}
+        </p>
+      )}
     </div>
   );
 }

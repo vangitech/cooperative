@@ -1,3 +1,4 @@
+/* global __APP_COMMIT__ */
 import { useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
@@ -24,6 +25,10 @@ import {
 } from 'lucide-react';
 
 const ALL_STAFF = ['super_admin', 'admin', 'officer', 'accountant', 'grantor'];
+
+// Build stamp, baked at build time (Vercel commit SHA or local git HEAD).
+// Lets anyone confirm which deployed version they are looking at.
+const BUILD = typeof __APP_COMMIT__ !== 'undefined' ? __APP_COMMIT__ : 'dev';
 
 const adminNav = [
   { to: '/admin',             label: 'Overview',     icon: LayoutDashboard, exact: true, roles: [...ALL_STAFF] },
@@ -122,6 +127,11 @@ function SidebarContent({ onNavigate, role, collapsed }) {
           </NavLink>
         </nav>
       </ScrollArea>
+      {!collapsed && (
+        <p className="px-5 py-2 font-mono text-[10px] text-muted-foreground/70" title="Deployed build — compare with the latest commit to confirm you're seeing the newest version">
+          build {BUILD}
+        </p>
+      )}
     </div>
   );
 }
