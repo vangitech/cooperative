@@ -68,6 +68,37 @@ export async function runReconciliation(client, { actorId = null, channel = 'web
     }
   }
 
+  // 5. Per-member proof: every wallet must equal its implied transaction
+  // history. This is what guarantees every member exists correctly in the
+  // books — any drift (deleted rows, manual edits, missed postings) files here.
+  const IN_TYPES = ['deposit', 'savings', 'dividend', 'loan_disbursement', 'fixed_maturity', 'refund', 'fixed_break', 'transfer_in'];
+  const OUT_TYPES = ['withdrawal', 'loan_repayment', 'fixed_deposit', 'transfer_out', 'collection_repayment', 'collection_down'];
+  const ALL_TYPES = [...IN_TYPES, ...OUT_TYPES];
+  const members = await client.query(
+    `SELECT u.id, u.email, COALESCE(w.balance,0) AS wallet,
+            COALESCE(SUM(CASE WHEN t.type IN (${IN_TYPES.map((_, i) => `$${i + 1}`).join(',')}) THEN t.amount
+                              WHEN t.type IN (${OUT_TYPES.map((_, i) => `$${IN_TYPES.length + i + 1}`).join(',')}) THEN -t.amount
+                              ELSE 0 END),0) AS implied,
+            COALESCE(array_agg(DISTINCT t.type) FILTER (WHERE t.type NOT IN (${ALL_TYPES.map((_, i) => `$${IN_TYPES.length + OUT_TYPES.length + i + 1}`).join(',')})), '{}') AS unknown_types
+     FROM users u LEFT JOIN wallets w ON w.user_id = u.id
+     LEFT JOIN transactions t ON t.user_id = u.id
+     GROUP BY u.id, u.email, w.balance`,
+    [...IN_TYPES, ...OUT_TYPES, ...ALL_TYPES]
+  );
+  for (const mrow of members.rows) {
+    const wallet = Number(mrow.wallet);
+    const implied = Number(mrow.implied);
+    if (mrow.unknown_types.length) {
+      fail(`member_unknown_tx#${mrow.id}`, `Member #${mrow.id} has no unmapped movements`,
+        0, mrow.unknown_types.length, { user_id: mrow.id, email: mrow.email, types: mrow.unknown_types });
+    } else if (Math.abs(wallet - implied) > 0.005) {
+      fail(`member_drift#${mrow.id}`, `Member #${mrow.id} wallet ties to history`,
+        implied, wallet, { user_id: mrow.id, email: mrow.email });
+    } else {
+      pass(`member_drift#${mrow.id}`, `Member #${mrow.id} wallet ties to history`, implied, wallet);
+    }
+  }
+
   const passed = checks.every((c) => c.passed);
   const run = await client.query(
     `INSERT INTO reconciliation_runs (run_by, channel, checks, passed)

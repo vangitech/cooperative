@@ -6,6 +6,7 @@ import { authenticate, requirePerm } from '../middleware/auth.js';
 import { generateRef, toMoney, isPositiveNumber, asyncHandler, sendCsv } from '../utils/helpers.js';
 import { audit, auditTx } from '../lib/audit.js';
 import { nextMemberNo, verifyKyc, validateDocument, ID_TYPES } from '../lib/onboarding.js';
+import { bytidConfigured } from '../lib/bytid.js';
 import { postJournal } from '../lib/ledger.js';
 import { surplusForMonth, DEFAULT_PAYOUT_RATIO, periodOf } from '../lib/ledger.js';
 import { assignVirtualAccount } from '../lib/virtualAccounts.js';
@@ -106,6 +107,8 @@ router.patch('/users/:id/role', requirePerm('*'), asyncHandler(async (req, res) 
 /* ---------- Staff-assisted onboarding (admin/officer creates member + KYC) ---------- */
 // One atomic call: user + wallet + member number + affiliation + KYC profile +
 // guarantors + identity documents, then the system verification pass.
+// IDs are MANDATORY: private workers provide NIN + BVN (both registry-verified),
+// civil servants provide IPPIS + BVN. No member is created without verified identity.
 // Password: supplied (min 6) or a one-time temp password returned in the
 // response for the officer to hand over in person. KYC auto-approval is
 // admin-only (separation of duties: officers capture, admins approve).
@@ -113,33 +116,60 @@ router.post('/users', requirePerm('members.create'), async (req, res) => {
   try {
     const {
       firstName, lastName, email, phone, address, password, orgId,
-      status = 'pending', autoApproveKyc = false,
+      status = 'pending', autoApproveKyc = false, employmentType,
+      ippisNumber, bvn,
       kyc = {}, guarantors = [], documents = [],
     } = req.body;
 
     if (!firstName || !lastName || !email)
       return res.status(400).json({ message: 'First name, last name and email are required' });
+    if (!['private', 'civil_servant'].includes(employmentType))
+      return res.status(400).json({ message: 'Choose private worker or civil servant' });
     if (password && password.length < 6)
       return res.status(400).json({ message: 'Password must be at least 6 characters' });
     if (!['pending', 'active'].includes(status))
       return res.status(400).json({ message: 'Status must be pending or active' });
     if (autoApproveKyc && req.user.role !== 'admin')
       return res.status(403).json({ message: 'Only admins can auto-approve KYC' });
+    if (!bytidConfigured())
+      return res.status(503).json({ message: 'Identity verification service unavailable — try again shortly' });
 
     const exists = await query('SELECT id FROM users WHERE email = $1', [String(email).toLowerCase()]);
     if (exists.rows.length) return res.status(409).json({ message: 'Email already registered' });
+
+    const cleanBvn = String(bvn || '').trim();
+    if (!/^\d{11}$/.test(cleanBvn))
+      return res.status(400).json({ message: 'BVN (11 digits) is mandatory' });
+
+    let ippis = null;
+    if (employmentType === 'civil_servant') {
+      ippis = String(ippisNumber || '').trim();
+      if (!/^\d{4,12}$/.test(ippis))
+        return res.status(400).json({ message: 'IPPIS number (4–12 digits) is mandatory for civil servants' });
+      const dup = await query('SELECT id FROM users WHERE ippis_number = $1', [ippis]);
+      if (dup.rows.length) return res.status(409).json({ message: 'This IPPIS number is already registered' });
+    }
 
     const {
       dob, gender, occupation, employer, idType, idNumber,
       residentialAddress, nextOfKinName, nextOfKinPhone, nextOfKinRelationship,
     } = kyc;
-    const kycGiven = idType || idNumber || nextOfKinName || nextOfKinPhone || dob;
-    if (kycGiven) {
+    // Private workers MUST present full KYC with NIN; civil servants present
+    // IPPIS+BVN above and may attach a full KYC profile when NIN is available.
+    const needsKyc = employmentType === 'private' || idType || idNumber;
+    if (employmentType === 'private') {
+      if (idType !== 'nin')
+        return res.status(400).json({ message: 'Private workers must present a NIN' });
+      if (!/^\d{11}$/.test(String(idNumber || '').trim()))
+        return res.status(400).json({ message: 'NIN (11 digits) is mandatory' });
+      if (!nextOfKinName || !nextOfKinPhone)
+        return res.status(400).json({ message: 'Next of kin name and phone are required' });
+      if (!dob)
+        return res.status(400).json({ message: 'Date of birth is required' });
+    } else if (needsKyc) {
       if (!idType || !ID_TYPES.includes(idType))
         return res.status(400).json({ message: `ID type must be one of: ${ID_TYPES.join(', ')}` });
       if (!idNumber) return res.status(400).json({ message: 'ID number is required' });
-      if (idType === 'nin' && !/^\d{11}$/.test(String(idNumber).trim()))
-        return res.status(400).json({ message: 'NIN must be exactly 11 digits' });
       if (!nextOfKinName || !nextOfKinPhone)
         return res.status(400).json({ message: 'Next of kin name and phone are required' });
     }
@@ -166,10 +196,11 @@ router.post('/users', requirePerm('members.create'), async (req, res) => {
       const memberNo = await nextMemberNo(client, affiliationId);
 
       const u = await client.query(
-        `INSERT INTO users (first_name,last_name,email,password_hash,phone,address,status,member_no)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-         RETURNING id, first_name, last_name, email, phone, role, status, member_no, created_at`,
-        [firstName, lastName, String(email).toLowerCase(), hash, phone || null, address || null, status, memberNo]
+        `INSERT INTO users (first_name,last_name,email,password_hash,phone,address,status,member_no,employment_type,ippis_number)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         RETURNING id, first_name, last_name, email, phone, role, status, member_no, employment_type, created_at`,
+        [firstName, lastName, String(email).toLowerCase(), hash, phone || null, address || null,
+         status, memberNo, employmentType, ippis]
       );
       const user = u.rows[0];
       await client.query('INSERT INTO wallets (user_id, balance) VALUES ($1, 0)', [user.id]);
@@ -181,7 +212,7 @@ router.post('/users', requirePerm('members.create'), async (req, res) => {
 
       let kycRow = null;
       let verification = null;
-      if (kycGiven) {
+      if (needsKyc) {
         const k = await client.query(
           `INSERT INTO kyc_profiles
              (user_id, dob, gender, occupation, employer, id_type, id_number,
@@ -196,7 +227,7 @@ router.post('/users', requirePerm('members.create'), async (req, res) => {
         kycRow = k.rows[0];
         verification = await verifyKyc(client, {
           userId: user.id, email: user.email, phone: user.phone, firstName, lastName, dob,
-          idType, idNumber, documents: files,
+          idType, idNumber, bvn: cleanBvn, documents: files,
         });
         const approved = autoApproveKyc && verification.passed;
         const v = await client.query(
@@ -248,7 +279,7 @@ router.post('/users', requirePerm('members.create'), async (req, res) => {
     let virtualAccount = null;
     try {
       const nin = /^\d{11}$/.test(String(kyc.idNumber || '').trim()) ? String(kyc.idNumber).trim() : undefined;
-      virtualAccount = await assignVirtualAccount(result.user.id, { nin });
+      virtualAccount = await assignVirtualAccount(result.user.id, { nin, bvn: cleanBvn });
     } catch (e) {
       console.error('virtual account deferred:', e.message);
     }

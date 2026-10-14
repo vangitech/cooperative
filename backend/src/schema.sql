@@ -405,6 +405,10 @@ CREATE TABLE IF NOT EXISTS org_counters (
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS member_no VARCHAR(40) UNIQUE;
 
+-- Staged registration: employment category + civil-service payroll ID.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS employment_type VARCHAR(20);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS ippis_number VARCHAR(30) UNIQUE;
+
 ALTER TABLE kyc_profiles ADD COLUMN IF NOT EXISTS id_document_url TEXT;
 ALTER TABLE kyc_profiles ADD COLUMN IF NOT EXISTS verification_result JSONB;
 ALTER TABLE kyc_profiles ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
@@ -436,6 +440,35 @@ REVOKE ALL ON TABLE public.organisations FROM anon, authenticated;
 REVOKE ALL ON TABLE public.organisation_members FROM anon, authenticated;
 REVOKE ALL ON TABLE public.org_counters FROM anon, authenticated;
 REVOKE ALL ON TABLE public.kyc_documents FROM anon, authenticated;
+
+-- Staged signup sessions: each verification step is recorded server-side so
+-- the client can never forge a "verified" flag. Short-lived, single-use.
+CREATE TABLE IF NOT EXISTS registration_intents (
+  id SERIAL PRIMARY KEY,
+  session_token VARCHAR(64) UNIQUE NOT NULL,
+  employment_type VARCHAR(20) NOT NULL,
+  org_id INTEGER REFERENCES organisations(id) ON DELETE SET NULL,
+  id_type VARCHAR(20) NOT NULL,
+  id_number VARCHAR(40),
+  id_verified BOOLEAN NOT NULL DEFAULT false,
+  id_result JSONB,
+  bvn VARCHAR(20),
+  bvn_verified BOOLEAN NOT NULL DEFAULT false,
+  bvn_result JSONB,
+  email VARCHAR(255),
+  email_code_hash VARCHAR(128),
+  email_code_expires_at TIMESTAMPTZ,
+  email_verified BOOLEAN NOT NULL DEFAULT false,
+  email_attempts INTEGER NOT NULL DEFAULT 0,
+  last_code_sent_at TIMESTAMPTZ,
+  status VARCHAR(20) NOT NULL DEFAULT 'open',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '30 minutes'
+);
+CREATE INDEX IF NOT EXISTS idx_regintents_token ON registration_intents(session_token);
+CREATE INDEX IF NOT EXISTS idx_regintents_expiry ON registration_intents(expires_at);
+ALTER TABLE public.registration_intents ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE public.registration_intents FROM anon, authenticated;
 
 -- L1 ledger: double-entry journal under the wallet ledger.
 -- One header per movement (+ N lines, so L2 splits need no schema change).

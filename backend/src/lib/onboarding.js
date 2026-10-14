@@ -55,7 +55,7 @@ export async function nextMemberNo(client, orgId) {
 // Deterministic, explainable, no external API needed. Returns
 // { passed, score, checks: [{ key, label, passed, detail }] }.
 // Human approval (officer/admin) stays the final gate.
-export async function verifyKyc(client, { userId, email, phone, firstName, lastName, dob, idType, idNumber, documents = [] }) {
+export async function verifyKyc(client, { userId, email, phone, firstName, lastName, dob, idType, idNumber, bvn, documents = [] }) {
   const checks = [];
   const push = (key, label, passed, detail = null) => checks.push({ key, label, passed, detail });
 
@@ -114,13 +114,15 @@ export async function verifyKyc(client, { userId, email, phone, firstName, lastN
   // A registry REJECT (not found / mismatch) hard-fails; a provider outage
   // only flags for human review so downtime never blocks onboarding.
   let registryHardFail = false;
+  let registryName = '';
   if (['nin', 'bvn', 'drivers_license', 'voters_card'].includes(idType) && idNumber && bytidConfigured()) {
     const reg = await verifyIdentity({ type: idType, idNumber, firstName, lastName });
     if (!reg.checked) {
       push('registry', `Registry lookup (${bytidMode()})`, true, reg.detail);
     } else if (reg.status === 'verified') {
+      registryName = reg.record?.full_name || '';
       push('registry', `Registry verified (${bytidMode()})`, true,
-        [reg.record?.full_name, reg.detail].filter(Boolean).join(' · '));
+        [registryName, reg.detail].filter(Boolean).join(' · '));
     } else if (reg.status === 'not_found') {
       registryHardFail = true;
       push('registry', `Registry verified (${bytidMode()})`, false, 'ID not found in registry');
@@ -136,12 +138,37 @@ export async function verifyKyc(client, { userId, email, phone, firstName, lastN
     push('registry', 'Registry verified', true, bytidConfigured() ? 'type not covered' : 'provider off — local checks only');
   }
 
+  // 9. BVN cross-check (when a BVN is supplied): it must resolve in the
+  // registry AND belong to the same surname as the primary ID record.
+  let bvnHardFail = false;
+  if (bvn && bytidConfigured()) {
+    const bRes = await verifyIdentity({ type: 'bvn', idNumber: bvn, firstName, lastName });
+    const surname = (n) => String(n || '').trim().split(/\s+/).pop().toUpperCase();
+    if (!bRes.checked || bRes.status === 'error') {
+      push('bvn_match', 'BVN belongs to same person', false, `${bRes.detail || 'lookup error'} — needs human review`);
+    } else if (bRes.status !== 'verified') {
+      bvnHardFail = true;
+      push('bvn_match', 'BVN belongs to same person', false, 'BVN not found in registry');
+    } else if (registryName && surname(registryName) !== surname(bvnResName(bRes))) {
+      bvnHardFail = true;
+      push('bvn_match', 'BVN belongs to same person', false,
+        `surname mismatch: ID ${surname(registryName)} vs BVN ${surname(bvnResName(bRes))}`);
+    } else {
+      push('bvn_match', 'BVN belongs to same person', true, bvnResName(bRes) || `BVN ${bRes.detail}`);
+    }
+  }
+
   const passedCount = checks.filter((c) => c.passed).length;
   const score = Math.round((passedCount / checks.length) * 100);
-  // Hard fails (identity reuse, bad ID, underage, registry reject) can never auto-pass.
-  const hardFail = registryHardFail ||
+  // Hard fails (identity reuse, bad ID, underage, registry reject, BVN mismatch)
+  // can never auto-pass.
+  const hardFail = registryHardFail || bvnHardFail ||
     checks.some((c) => ['id_unique', 'id_format', 'age'].includes(c.key) && !c.passed);
   return { passed: !hardFail && score >= 70, score, checks };
+}
+
+function bvnResName(bRes) {
+  return bRes?.record?.full_name || '';
 }
 
 export async function publicOrgList() {

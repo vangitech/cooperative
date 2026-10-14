@@ -3,7 +3,10 @@
 // to the console instead so flows remain testable without a provider.
 export async function sendMail({ to, subject, html }) {
   const key = process.env.RESEND_API_KEY;
-  const from = process.env.MAIL_FROM || 'MPCS <no-reply@mpcs.com>';
+  // No owned domain yet (mpcs.com not purchased) — Resend's test sender works
+  // but only delivers to the account owner's inbox. Switch MAIL_FROM to an
+  // address on your verified domain once purchased.
+  const from = process.env.MAIL_FROM || 'MPCS <onboarding@resend.dev>';
 
   if (!key) {
     console.log('📧 [dev mailer] ─────────────────────');

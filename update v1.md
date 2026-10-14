@@ -73,6 +73,13 @@ Verdict: logins and money actions covered; tamper-proofing and session tracking 
 
 ---
 
+# Registration Follow-ups
+
+- **R1 — Resolve `member_drift#3` deliberately.** Suspense flags a historical ₦1,500 gap on member@mpcs (wallet vs implied history). Investigate (likely a missing top-up record), then correct via officer top-up with a note or a maker-checker adjustment. Do not delete the item — it proves the queue works.
+- **R3 — Gate first withdrawal on verified email.** Signup stays frictionless, but no verified email = no money out. Small change, closes the remaining trust gap in onboarding.
+
+---
+
 # Appendix — Original Product Feedback (preserved)
 
 # MPCS Project Feedback — Update v1

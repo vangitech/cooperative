@@ -21,7 +21,8 @@ const ID_TYPES = [
 
 const emptyForm = {
   firstName: '', lastName: '', email: '', phone: '', address: '', password: '',
-  orgId: '', status: 'pending', autoApproveKyc: false,
+  orgId: '', status: 'pending', autoApproveKyc: false, employmentType: 'private',
+  ippisNumber: '', bvn: '',
   dob: '', gender: '', occupation: '', employer: '', idType: 'nin', idNumber: '',
   residentialAddress: '', nextOfKinName: '', nextOfKinPhone: '', nextOfKinRelationship: '',
 };
@@ -91,6 +92,8 @@ export default function OnboardDialog({ onDone }) {
         ...form,
         orgId: form.orgId ? Number(form.orgId) : undefined,
         password: form.password || undefined,
+        ippisNumber: form.ippisNumber || undefined,
+        bvn: form.bvn || undefined,
         kyc: {
           dob: form.dob || undefined, gender: form.gender || undefined,
           occupation: form.occupation || undefined, employer: form.employer || undefined,
@@ -185,13 +188,28 @@ export default function OnboardDialog({ onDone }) {
                     {orgs.map((o) => <option key={o.id} value={o.id}>{o.name} ({o.code})</option>)}
                   </select>
                 </div>
+                <div>
+                  <Label>Employment</Label>
+                  <select className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm" value={form.employmentType} onChange={update('employmentType')}>
+                    <option value="private">Private worker</option>
+                    <option value="civil_servant">Civil servant</option>
+                  </select>
+                </div>
+                {form.employmentType === 'civil_servant' ? (
+                  <div><Label>IPPIS number *</Label><Input required value={form.ippisNumber} onChange={update('ippisNumber')} inputMode="numeric" placeholder="4–12 digits" /></div>
+                ) : (
+                  <div><Label>BVN (11 digits) *</Label><Input required value={form.bvn} onChange={(e) => setForm({ ...form, bvn: e.target.value.replace(/\D/g, '') })} inputMode="numeric" maxLength={11} /></div>
+                )}
+                {form.employmentType === 'civil_servant' && (
+                  <div className="col-span-2"><Label>BVN (11 digits) *</Label><Input required value={form.bvn} onChange={(e) => setForm({ ...form, bvn: e.target.value.replace(/\D/g, '') })} inputMode="numeric" maxLength={11} /></div>
+                )}
               </div>
             </div>
 
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">KYC + ID</p>
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">KYC + ID (mandatory)</p>
               <div className="grid grid-cols-2 gap-3">
-                <div><Label>Date of birth</Label><Input type="date" value={form.dob} onChange={update('dob')} /></div>
+                <div><Label>Date of birth *</Label><Input required type="date" value={form.dob} onChange={update('dob')} /></div>
                 <div>
                   <Label>Gender</Label>
                   <select className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm" value={form.gender} onChange={update('gender')}>
@@ -208,10 +226,10 @@ export default function OnboardDialog({ onDone }) {
                     {ID_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
                   </select>
                 </div>
-                <div><Label>ID number</Label><Input value={form.idNumber} onChange={update('idNumber')} placeholder="11-digit NIN" /></div>
+                <div><Label>ID number *</Label><Input required value={form.idNumber} onChange={update('idNumber')} placeholder="11-digit NIN" /></div>
                 <div className="col-span-2"><Label>Residential address</Label><Textarea rows={2} value={form.residentialAddress} onChange={update('residentialAddress')} /></div>
-                <div><Label>Next of kin name</Label><Input value={form.nextOfKinName} onChange={update('nextOfKinName')} /></div>
-                <div><Label>Next of kin phone</Label><Input value={form.nextOfKinPhone} onChange={update('nextOfKinPhone')} /></div>
+                <div><Label>Next of kin name *</Label><Input required value={form.nextOfKinName} onChange={update('nextOfKinName')} /></div>
+                <div><Label>Next of kin phone *</Label><Input required value={form.nextOfKinPhone} onChange={update('nextOfKinPhone')} /></div>
                 <div className="col-span-2"><Label>Kin relationship</Label><Input value={form.nextOfKinRelationship} onChange={update('nextOfKinRelationship')} /></div>
                 <div className="col-span-2">
                   <Label>ID scans (jpg/png/pdf ≤ 5MB, max 5)</Label>
