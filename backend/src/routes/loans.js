@@ -11,6 +11,9 @@ import {
   assessPenalties,
   allocateRepayment,
   loanOutstanding,
+  repaymentSplit,
+  closeLoanIfPaid,
+  settleDueLoans,
 } from '../lib/loans.js';
 
 const router = express.Router();
@@ -237,22 +240,8 @@ router.post(
             after: { status: newStatus, amount_paid: newPaid } });
         // Split the receipt across principal / interest / penalty pro-rata
         // (exact in aggregate on full repayment; last leg absorbs rounding).
-        // Follow-up: schedule-level penalty allocation when L2 deepens.
-        const pBase = Number(loan.amount);
-        const iBase = Math.max(0, Number(loan.total_repayable) - pBase);
-        const fBase = Number(loan.penalty_accrued || 0);
-        const base = pBase + iBase + fBase;
-        let principal = base > 0 ? toMoney((amt * pBase) / base) : amt;
-        let interest = base > 0 ? toMoney((amt * iBase) / base) : 0;
-        let penalty = toMoney(amt - principal - interest);
-        if (penalty < 0) {
-          interest = toMoney(interest + penalty); // absorb sub-kobo rounding
-          penalty = 0;
-        }
-        if (interest < 0) {
-          principal = toMoney(principal + interest);
-          interest = 0;
-        }
+        // Same helper as the auto-debit sweep so both post identical legs.
+        const { principal, interest, penalty } = repaymentSplit(loan, amt);
         await postJournal(client, req, { type: 'loan_repayment', transactionId: tx.rows[0].id,
           reference: tx.rows[0].reference, amount: amt,
           lines: [
@@ -265,10 +254,34 @@ router.post(
         return { transaction: tx.rows[0], amountPaid: newPaid, status: newStatus, balance: newBalance };
       });
 
+      if (result.status === 'repaid') {
+        await withTransaction(async (client) => {
+          const l = await client.query('SELECT * FROM loans WHERE id = $1', [req.params.id]);
+          if (l.rows[0]) await closeLoanIfPaid(client, req, l.rows[0]);
+        });
+      }
       res.json(result);
     } catch (e) {
       res.status(400).json({ message: e.message });
     }
+  })
+);
+
+// PATCH /api/loans/:id/auto-debit — member opts in/out of auto-debit.
+router.patch(
+  '/:id/auto-debit',
+  asyncHandler(async (req, res) => {
+    const { autoDebit } = req.body || {};
+    if (typeof autoDebit !== 'boolean')
+      return res.status(400).json({ message: 'autoDebit must be true or false' });
+    const { rows } = await query(
+      `UPDATE loans SET auto_debit = $1 WHERE id = $2 AND user_id = $3 AND status = 'disbursed'
+       RETURNING id, auto_debit`,
+      [autoDebit, req.params.id, req.user.id]
+    );
+    if (!rows[0]) return res.status(404).json({ message: 'Active loan not found' });
+    audit(req, `loan.auto_debit_${autoDebit ? 'on' : 'off'}`, 'loan', rows[0].id, {});
+    res.json(rows[0]);
   })
 );
 

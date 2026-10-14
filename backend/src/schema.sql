@@ -689,6 +689,43 @@ INSERT INTO organisations (name, code, type, status)
 VALUES ('Wuse Market', 'WUSE-MKT', 'market', 'active')
 ON CONFLICT (code) DO NOTHING;
 
+-- Loan payoff closure + auto-debit consent.
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS auto_debit BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE loans ADD COLUMN IF NOT EXISTS closed_at TIMESTAMPTZ;
+
+-- Per-installment principal/interest split (schedules used to track blended
+-- amounts only). Paid legs split alongside dues so statements can show
+-- "of which interest" per installment.
+ALTER TABLE loan_schedules ADD COLUMN IF NOT EXISTS principal_due NUMERIC(15,2) NOT NULL DEFAULT 0;
+ALTER TABLE loan_schedules ADD COLUMN IF NOT EXISTS interest_due NUMERIC(15,2) NOT NULL DEFAULT 0;
+ALTER TABLE loan_schedules ADD COLUMN IF NOT EXISTS principal_paid NUMERIC(15,2) NOT NULL DEFAULT 0;
+ALTER TABLE loan_schedules ADD COLUMN IF NOT EXISTS interest_paid NUMERIC(15,2) NOT NULL DEFAULT 0;
+
+-- Backfill the split for pre-existing schedules: pro-rata by the parent
+-- loan's principal vs interest, last installment absorbing rounding on both
+-- legs; paid legs split pro-rata of amount_paid.
+DO $$
+DECLARE r RECORD;
+BEGIN
+  FOR r IN SELECT DISTINCT loan_id FROM loan_schedules WHERE principal_due = 0 AND interest_due = 0 LOOP
+    UPDATE loan_schedules s SET
+      principal_due = ROUND(s.amount_due * (l.amount / NULLIF(l.total_repayable, 0)), 2),
+      interest_due = s.amount_due - ROUND(s.amount_due * (l.amount / NULLIF(l.total_repayable, 0)), 2)
+    FROM loans l WHERE s.loan_id = r.loan_id AND l.id = r.loan_id AND l.total_repayable > 0;
+    UPDATE loan_schedules s SET
+      principal_due = l.amount - (SELECT COALESCE(SUM(x.principal_due),0) FROM loan_schedules x WHERE x.loan_id = r.loan_id AND x.id <> s.id),
+      interest_due = (l.total_repayable - l.amount) - (SELECT COALESCE(SUM(x.interest_due),0) FROM loan_schedules x WHERE x.loan_id = r.loan_id AND x.id <> s.id)
+    FROM loans l
+    WHERE s.loan_id = r.loan_id AND l.id = r.loan_id
+      AND s.due_number = (SELECT MAX(due_number) FROM loan_schedules WHERE loan_id = r.loan_id);
+    UPDATE loan_schedules s SET
+      principal_paid = LEAST(s.amount_paid, ROUND(s.amount_paid * (s.principal_due / NULLIF(s.amount_due, 0)), 2)),
+      interest_paid = s.amount_paid - LEAST(s.amount_paid, ROUND(s.amount_paid * (s.principal_due / NULLIF(s.amount_due, 0)), 2))
+    WHERE s.loan_id = r.loan_id AND s.amount_paid > 0 AND s.amount_due > 0;
+  END LOOP;
+END $$;
+-- Status chain: pending → grantor_approved → kyc_verified → disbursed
+-- (rejected anytime; kyc_failed returns to the officer queue for retry).
 -- Loan maker-checker: grantor → account officer (KYC) → accountant (disburse).
 -- Status chain: pending → grantor_approved → kyc_verified → disbursed
 -- (rejected anytime; kyc_failed returns to the officer queue for retry).

@@ -10,7 +10,7 @@ import { bytidConfigured } from '../lib/bytid.js';
 import { postJournal } from '../lib/ledger.js';
 import { surplusForMonth, DEFAULT_PAYOUT_RATIO, periodOf } from '../lib/ledger.js';
 import { assignVirtualAccount } from '../lib/virtualAccounts.js';
-import { ensureSchedules } from '../lib/loans.js';
+import { ensureSchedules, settleDueLoans } from '../lib/loans.js';
 import { notify } from '../lib/notify.js';
 import {
   borrowerOrg, orgGrantors, usersInRoles, recordReview,
@@ -887,6 +887,7 @@ router.patch('/dividends/:id/pay', requirePerm('dividends.manage'), async (req, 
       link: '/dividends',
     });
     await settleDueCollections(withTransaction, result.user_id);
+    await settleDueLoans(withTransaction, result.user_id);
     await runDuePlans();
     res.json(result);
   } catch (e) {
@@ -1127,6 +1128,7 @@ router.post('/fund', requirePerm('fund'), asyncHandler(async (req, res) => {
   });
 
   await settleDueCollections(withTransaction, result.transaction.user_id);
+  await settleDueLoans(withTransaction, result.transaction.user_id);
   await runDuePlans();
   res.status(201).json(result);
 }));

@@ -6,6 +6,7 @@ import { audit, auditTx } from '../lib/audit.js';
 import { postJournal } from '../lib/ledger.js';
 import { notify } from '../lib/notify.js';
 import { settleDueCollections } from '../lib/collections.js';
+import { settleDueLoans } from '../lib/loans.js';
 import { runDuePlans } from '../lib/plans.js';
 
 const router = express.Router();
@@ -311,6 +312,7 @@ router.post('/transfer', requireVerifiedEmail, asyncHandler(async (req, res) => 
   }
 
   await settleDueCollections(withTransaction, result.recipientId);
+  await settleDueLoans(withTransaction, result.recipientId);
   await runDuePlans();
   res.status(201).json(result);
 }));

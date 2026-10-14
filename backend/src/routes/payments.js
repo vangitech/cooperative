@@ -8,6 +8,7 @@ import { audit, auditTx } from '../lib/audit.js';
 import { postJournal } from '../lib/ledger.js';
 import { notify } from '../lib/notify.js';
 import { settleDueCollections } from '../lib/collections.js';
+import { settleDueLoans } from '../lib/loans.js';
 import { runDuePlans } from '../lib/plans.js';
 
 // Default money rail (L4). All provider calls go through here —
@@ -229,6 +230,7 @@ router.get(
       creditFundIntent(client, intent.id, verification.data, req)
     );
     await settleDueCollections(withTransaction, intent.user_id);
+    await settleDueLoans(withTransaction, intent.user_id);
     await runDuePlans();
     res.json({ verified: true, ...result });
   })
@@ -455,6 +457,7 @@ async function processFlwEvent(event, data, req) {
               );
               if (!result.already) {
                 await settleDueCollections(withTransaction, account.user_id);
+                await settleDueLoans(withTransaction, account.user_id);
                 await runDuePlans();
               }
             }

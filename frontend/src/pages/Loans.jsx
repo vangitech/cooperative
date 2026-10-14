@@ -64,6 +64,13 @@ export default function Loans() {
     } catch (e) { alert(e.message); }
   };
 
+  const toggleAutoDebit = async (loan) => {
+    try {
+      await api.patch(`/loans/${loan.id}/auto-debit`, { autoDebit: !loan.auto_debit });
+      await load();
+    } catch (e) { alert(e.message); }
+  };
+
   const viewSchedule = async (loan) => {
     try {
       setSchedule({ loan, loading: true });
@@ -131,6 +138,18 @@ export default function Loans() {
                   <TableCell className="text-right">{formatCurrency(l.amount_paid)}</TableCell>
                   <TableCell><Badge variant={statusVariant[l.status]} className="capitalize">{String(l.status).replace('_', ' ')}</Badge>
                     {STAGE_HINT[l.status] && <p className="text-[11px] text-muted-foreground mt-0.5">{STAGE_HINT[l.status]}</p>}
+                    {l.status === 'repaid' && l.closed_at && (
+                      <p className="text-[11px] text-muted-foreground mt-0.5">Closed {formatDate(l.closed_at)}</p>
+                    )}
+                    {['disbursed', 'approved'].includes(l.status) && (
+                      <button
+                        onClick={() => toggleAutoDebit(l)}
+                        title={l.auto_debit ? 'Auto-debit is ON — click to turn off' : 'Auto-debit is OFF — click to turn on'}
+                        className="mt-1 text-[11px] font-medium text-primary hover:underline"
+                      >
+                        Auto-debit: {l.auto_debit === false ? 'OFF' : 'ON'}
+                      </button>
+                    )}
                   </TableCell>
                   <TableCell className="text-right whitespace-nowrap">
                     {['disbursed', 'approved'].includes(l.status) && (
@@ -182,6 +201,8 @@ export default function Loans() {
                     <TableHead>#</TableHead>
                     <TableHead>Due</TableHead>
                     <TableHead className="text-right">Amount</TableHead>
+                    <TableHead className="text-right hidden sm:table-cell">Principal</TableHead>
+                    <TableHead className="text-right hidden sm:table-cell">Interest</TableHead>
                     <TableHead className="text-right">Paid</TableHead>
                     <TableHead>State</TableHead>
                   </TableRow>
@@ -192,6 +213,14 @@ export default function Loans() {
                       <TableCell>{s.due_number}</TableCell>
                       <TableCell className="text-sm">{formatDate(s.due_date)}</TableCell>
                       <TableCell className="text-right">{formatCurrency(s.amount_due)}</TableCell>
+                      <TableCell className="text-right hidden sm:table-cell text-xs text-muted-foreground">
+                        {formatCurrency(s.principal_due)}
+                        {Number(s.principal_paid) > 0 && <span className="block">paid {formatCurrency(s.principal_paid)}</span>}
+                      </TableCell>
+                      <TableCell className="text-right hidden sm:table-cell text-xs text-muted-foreground">
+                        {formatCurrency(s.interest_due)}
+                        {Number(s.interest_paid) > 0 && <span className="block">paid {formatCurrency(s.interest_paid)}</span>}
+                      </TableCell>
                       <TableCell className="text-right">{formatCurrency(s.amount_paid)}</TableCell>
                       <TableCell>
                         {Number(s.amount_paid) >= Number(s.amount_due) ? (
