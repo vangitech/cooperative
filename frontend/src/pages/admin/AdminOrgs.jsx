@@ -54,6 +54,10 @@ export default function AdminOrgs() {
   const [seatTarget, setSeatTarget] = useState(null); // { member } or { seat, isEdit }
   const [seatPhone, setSeatPhone] = useState('');
   const [seatEmail, setSeatEmail] = useState('');
+  // Creation-time grantor picker: up to 3 leaders with union contacts.
+  const [allMembers, setAllMembers] = useState([]);
+  const [gSearch, setGSearch] = useState('');
+  const [gPicks, setGPicks] = useState([]);
 
   const toggle = (id) => setExpanded((e) => ({ ...e, [id]: !(e[id] ?? true) }));
 
@@ -62,7 +66,11 @@ export default function AdminOrgs() {
 
   const update = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
-  const openCreate = () => { setEditing(null); setForm(emptyForm); setOpen(true); };
+  const openCreate = () => {
+    setEditing(null); setForm(emptyForm); setOpen(true);
+    setGPicks([]); setGSearch('');
+    api.get('/admin/users').then(setAllMembers).catch(() => setAllMembers([]));
+  };
   const openEdit = (o) => {
     setEditing(o);
     setForm({
@@ -82,13 +90,35 @@ export default function AdminOrgs() {
         await api.patch(`/orgs/${editing.id}`, { ...rest, parentId: rest.parentId || null });
         toast.success('Organisation updated');
       } else {
-        await api.post('/orgs', { ...form, parentId: form.parentId || null });
-        toast.success('Organisation created');
+        for (const p of gPicks) {
+          if (!p.seatPhone.trim()) throw new Error(`Union phone is required for ${p.name}`);
+        }
+        const r = await api.post('/orgs', {
+          ...form,
+          parentId: form.parentId || null,
+          grantors: gPicks.map((p) => ({
+            userId: p.id,
+            phone: p.seatPhone.trim(),
+            email: p.seatEmail.trim() || undefined,
+          })),
+        });
+        toast.success(
+          gPicks.length
+            ? `Organisation created with ${r.grantors?.length ?? gPicks.length} grantor${gPicks.length === 1 ? '' : 's'}`
+            : 'Organisation created — seat 3 grantors from its members next'
+        );
       }
       setOpen(false);
       load();
     } catch (err) { toast.error(err.message); }
   };
+
+  const gMatches = gSearch.trim()
+    ? allMembers
+        .filter((u) => u.role !== 'super_admin' && u.status === 'active' && !gPicks.some((p) => p.id === u.id))
+        .filter((u) => `${u.first_name} ${u.last_name} ${u.email} ${u.member_no || ''}`.toLowerCase().includes(gSearch.toLowerCase()))
+        .slice(0, 6)
+    : [];
 
   const viewMembers = async (o) => {
     setMembersOrg(o);
@@ -319,6 +349,44 @@ export default function AdminOrgs() {
                     <div><Label>Contact name</Label><Input value={form.contactName} onChange={update('contactName')} /></div>
                     <div><Label>Contact phone</Label><Input value={form.contactPhone} onChange={update('contactPhone')} /></div>
                     <div className="col-span-2"><Label>Address</Label><Textarea rows={2} value={form.address} onChange={update('address')} /></div>
+                    {!editing && (
+                      <div className="col-span-2 rounded-md border p-3 space-y-2">
+                        <Label>Union grantors ({gPicks.length}/3) — leaders with union phone (required) + email (optional)</Label>
+                        <p className="text-xs text-muted-foreground">
+                          Pick the 3 leaders now (any active, fully-registered member — they&rsquo;re affiliated automatically)
+                          or seat them later from the union&rsquo;s members.
+                        </p>
+                        {gPicks.map((p) => (
+                          <div key={p.id} className="rounded-md border px-3 py-2 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <p className="text-sm font-medium">{p.name} <span className="text-xs font-normal text-muted-foreground">{p.email}</span></p>
+                              <Button type="button" variant="ghost" size="sm" className="text-destructive" onClick={() => setGPicks(gPicks.filter((x) => x.id !== p.id))}>Remove</Button>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div><Label>Union phone *</Label><Input required value={p.seatPhone} onChange={(e) => setGPicks(gPicks.map((x) => x.id === p.id ? { ...x, seatPhone: e.target.value } : x))} placeholder="0803…" /></div>
+                              <div><Label>Union email (optional)</Label><Input type="email" value={p.seatEmail} onChange={(e) => setGPicks(gPicks.map((x) => x.id === p.id ? { ...x, seatEmail: e.target.value } : x))} placeholder="union@example.com" /></div>
+                            </div>
+                          </div>
+                        ))}
+                        {gPicks.length < 3 && (
+                          <div>
+                            <Input placeholder="Search members by name, email or ID…" value={gSearch} onChange={(e) => setGSearch(e.target.value)} />
+                            {gMatches.map((u) => (
+                              <div key={u.id} className="flex items-center justify-between text-sm border rounded-md px-3 py-1.5 mt-1.5">
+                                <span>{u.first_name} {u.last_name} <span className="text-xs text-muted-foreground">{u.email}</span></span>
+                                <Button type="button" variant="ghost" size="sm" onClick={() => {
+                                  setGPicks([...gPicks, {
+                                    id: u.id, name: `${u.first_name} ${u.last_name}`, email: u.email,
+                                    seatPhone: u.phone || '', seatEmail: '',
+                                  }]);
+                                  setGSearch('');
+                                }}>Add</Button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {editing && (
                       <div>
                         <Label>Status</Label>

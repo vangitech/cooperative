@@ -67,6 +67,88 @@ function cleanCode(v) {
   return String(v || '').trim().toUpperCase().replace(/[^A-Z0-9-]/g, '').slice(0, 20);
 }
 
+// Seat one union grantor. Shared by the seats endpoint and organisation
+// creation (a brand-new union has no members yet, so leaders are picked
+// from anywhere and auto-affiliated as secondary members — their primary
+// union never moves). Throws { status, message } on any rule failure.
+// `db` is pool or a transaction client (both expose .query).
+async function seatGrantor(db, { orgId, orgName, userId, phone, email, assignedBy }) {
+  const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
+
+  const cand = await db.query(
+    `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.role, u.status,
+            k.id_number, k.bvn_verified,
+            (SELECT COUNT(*) FROM kyc_documents d WHERE d.user_id = u.id) AS docs
+     FROM users u LEFT JOIN kyc_profiles k ON k.user_id = u.id
+     WHERE u.id = $1`,
+    [userId]
+  );
+  const c = cand.rows[0];
+  if (!c) fail(404, 'Member not found');
+  if (c.status !== 'active') fail(400, `${c.first_name} ${c.last_name}'s account is not active`);
+  if (c.role === 'super_admin') fail(400, 'The super-admin cannot be a union grantor');
+  if (!c.id_number && !c.bvn_verified) {
+    fail(400, `${c.first_name} ${c.last_name} is not fully registered — verified NIN/BVN plus uploaded documents are required before seating a grantor`);
+  }
+  if (Number(c.docs) === 0) {
+    fail(400, `${c.first_name} ${c.last_name} is not fully registered — verified NIN/BVN plus uploaded documents are required before seating a grantor`);
+  }
+
+  // Affiliation: primary members stay put; anyone else is affiliated as a
+  // secondary (non-primary) member so the seat has a home without moving them.
+  const aff = await db.query(
+    'SELECT id, is_primary FROM organisation_members WHERE user_id = $1 AND org_id = $2',
+    [userId, orgId]
+  );
+  let affiliated = false;
+  if (!aff.rows[0]) {
+    try {
+      await db.query(
+        `INSERT INTO organisation_members (user_id, org_id, member_no, is_primary, status)
+         VALUES ($1,$2,$3,false,'active')`,
+        [userId, orgId, `AFF-${orgId}-${userId}`]
+      );
+      affiliated = true;
+    } catch (e) {
+      if (e.code !== '23505') throw e;
+    }
+  }
+
+  const seats = await db.query('SELECT COUNT(*) FROM org_grantors WHERE org_id = $1', [orgId]);
+  if (Number(seats.rows[0].count) >= 3)
+    fail(409, `${orgName} already has 3 grantors — remove one first`);
+
+  // Seat contact: official union phone (required) + email (optional),
+  // defaulting to the member's own details when not supplied.
+  const contactPhone = String(phone || '').trim() || c.phone || null;
+  if (!contactPhone) fail(400, 'A contact phone is required for the grantor seat');
+  const contactEmail = String(email || '').trim() || null;
+  if (contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail))
+    fail(400, 'Contact email is invalid');
+
+  let seat = null;
+  try {
+    ({ rows: seat } = await db.query(
+      `INSERT INTO org_grantors (org_id, user_id, assigned_by, contact_phone, contact_email)
+       VALUES ($1,$2,$3,$4,$5) ON CONFLICT (org_id, user_id) DO NOTHING RETURNING *`,
+      [orgId, userId, assignedBy, contactPhone, contactEmail]
+    ));
+  } catch (e) {
+    // Stale DB without the contact columns: seat without contacts.
+    if (/column .* does not exist|undefined_column/.test(String(e.message))) {
+      ({ rows: seat } = await db.query(
+        `INSERT INTO org_grantors (org_id, user_id, assigned_by)
+         VALUES ($1,$2,$3) ON CONFLICT (org_id, user_id) DO NOTHING RETURNING *`,
+        [orgId, userId, assignedBy]
+      ));
+    } else {
+      throw e;
+    }
+  }
+  await db.query('UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2', ['grantor', userId]);
+  return { seat: seat[0] || null, contactPhone, contactEmail, affiliated, member: c };
+}
+
 // Union leadership: every organisation seats 3 grantors (union leaders).
 // Only admin / super_admin may assign — from FULLY REGISTERED members of
 // that union (active + verified identity + address documents on file).
@@ -118,71 +200,23 @@ router.post(
       ]);
       if (!org.rows[0]) return res.status(404).json({ message: 'Organisation not found or inactive' });
 
-      // Candidate must be a fully-registered member OF THIS UNION: active,
-      // primary member, verified identity (NIN/BVN snapshot) + address
-      // documents uploaded.
-      const cand = await query(
-        `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.role, u.status,
-                k.id_number, k.bvn_verified,
-                (SELECT COUNT(*) FROM kyc_documents d WHERE d.user_id = u.id) AS docs
-         FROM users u
-         JOIN organisation_members m ON m.user_id = u.id AND m.org_id = $1 AND m.is_primary AND m.status = 'active'
-         LEFT JOIN kyc_profiles k ON k.user_id = u.id
-         WHERE u.id = $2`,
-        [req.params.id, userId]
-      );
-      const c = cand.rows[0];
-      if (!c) return res.status(404).json({ message: 'Member not found in this union' });
-      if (c.status !== 'active') return res.status(400).json({ message: 'Member account is not active' });
-      if (c.role === 'super_admin') return res.status(400).json({ message: 'The super-admin cannot be a union grantor' });
-      const identityOk = Boolean(c.id_number || c.bvn_verified);
-      if (!identityOk || Number(c.docs) === 0) {
-        return res.status(400).json({
-          message: `${c.first_name} ${c.last_name} is not fully registered — verified NIN/BVN plus uploaded documents are required before seating a grantor`,
-        });
-      }
-
-      const seats = await query('SELECT COUNT(*) FROM org_grantors WHERE org_id = $1', [req.params.id]);
-      if (Number(seats.rows[0].count) >= 3)
-        return res.status(409).json({ message: `${org.rows[0].name} already has 3 grantors — remove one first` });
-
-      // Seat contact: official union phone (required) + email (optional).
-      // Defaults to the member's own details when not supplied.
-      const contactPhone = String(phone || '').trim() || c.phone || null;
-      if (!contactPhone)
-        return res.status(400).json({ message: 'A contact phone is required for the grantor seat' });
-      const contactEmail = String(email || '').trim() || null;
-      if (contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail))
-        return res.status(400).json({ message: 'Contact email is invalid' });
-
-      let seat = null;
-      try {
-        ({ rows: seat } = await query(
-          `INSERT INTO org_grantors (org_id, user_id, assigned_by, contact_phone, contact_email)
-           VALUES ($1,$2,$3,$4,$5) ON CONFLICT (org_id, user_id) DO NOTHING RETURNING *`,
-          [req.params.id, userId, req.user.id, contactPhone, contactEmail]
-        ));
-      } catch (e) {
-        // Stale DB without the contact columns: seat without contacts.
-        if (/column .* does not exist|undefined_column/.test(String(e.message))) {
-          ({ rows: seat } = await query(
-            `INSERT INTO org_grantors (org_id, user_id, assigned_by)
-             VALUES ($1,$2,$3) ON CONFLICT (org_id, user_id) DO NOTHING RETURNING *`,
-            [req.params.id, userId, req.user.id]
-          ));
-        } else {
-          throw e;
-        }
-      }
-      await query('UPDATE users SET role = $1, updated_at = NOW() WHERE id = $2', ['grantor', userId]);
+      // Any fully-registered member can be seated — non-members are
+      // auto-affiliated (secondary) so a union's first leaders don't need
+      // a prior move. Primary affiliation never changes here.
+      const out = await seatGrantor(query, {
+        orgId: req.params.id, orgName: org.rows[0].name, userId,
+        phone, email, assignedBy: req.user.id,
+      });
       audit(req, 'org.grantor_assigned', 'organisation', req.params.id,
-        { userId: Number(userId), org: org.rows[0].name, contactPhone, contactEmail });
-      res.status(201).json({ ok: true, seat: seat[0] || null });
+        { userId: Number(userId), org: org.rows[0].name,
+          contactPhone: out.contactPhone, contactEmail: out.contactEmail,
+          affiliated: out.affiliated });
+      res.status(201).json({ ok: true, seat: out.seat, affiliated: out.affiliated });
     } catch (e) {
       if (/relation .* does not exist|undefined_table/.test(String(e.message))) {
         return res.status(400).json({ message: 'Grantor seats need a migration — run npm run migrate' });
       }
-      throw e;
+      res.status(e.status || 400).json({ message: e.message });
     }
   })
 );
@@ -338,29 +372,60 @@ router.post(
   authenticate,
   requirePerm('orgs.manage'),
   asyncHandler(async (req, res) => {
-    const { name, code, type = 'branch', parentId, contactName, contactPhone, address } = req.body;
+    // Optional `grantors: [{ userId, phone, email }]` seats up to 3 union
+    // leaders atomically with creation — each with official contact phone
+    // (required) + email (optional). Non-member leaders are affiliated
+    // (secondary) without moving their primary union.
+    const { name, code, type = 'branch', parentId, contactName, contactPhone, address, grantors = [] } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ message: 'Organisation name is required' });
     const clean = cleanCode(code);
     if (!clean) return res.status(400).json({ message: 'Code is required (letters/numbers, e.g. LAG-MKT)' });
     if (!ORG_TYPES.includes(type)) {
       return res.status(400).json({ message: `Type must be one of: ${ORG_TYPES.join(', ')}` });
     }
+    if (!Array.isArray(grantors)) return res.status(400).json({ message: 'grantors must be an array' });
+    if (grantors.length > 3) return res.status(400).json({ message: 'Maximum of 3 grantors' });
+    const seen = new Set();
+    for (const g of grantors) {
+      if (!g || !g.userId) return res.status(400).json({ message: 'Each grantor needs a userId' });
+      if (seen.has(Number(g.userId))) return res.status(400).json({ message: 'Duplicate grantor in the list' });
+      seen.add(Number(g.userId));
+    }
     if (parentId) {
       const p = await query('SELECT id FROM organisations WHERE id = $1', [parentId]);
       if (!p.rows[0]) return res.status(400).json({ message: 'Parent organisation not found' });
     }
     try {
-      const { rows } = await query(
-        `INSERT INTO organisations (name, code, type, parent_id, contact_name, contact_phone, address, created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
-        [name.trim(), clean, type, parentId || null, contactName || null, contactPhone || null,
-         address || null, req.user.id]
-      );
-      audit(req, 'org.created', 'organisation', rows[0].id, { name, code: clean, type }, { after: rows[0] });
-      res.status(201).json(rows[0]);
+      const out = await withTransaction(async (client) => {
+        const { rows } = await client.query(
+          `INSERT INTO organisations (name, code, type, parent_id, contact_name, contact_phone, address, created_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+          [name.trim(), clean, type, parentId || null, contactName || null, contactPhone || null,
+           address || null, req.user.id]
+        );
+        const org = rows[0];
+        const seated = [];
+        for (const g of grantors) {
+          const s = await seatGrantor(client, {
+            orgId: org.id, orgName: org.name, userId: g.userId,
+            phone: g.phone, email: g.email, assignedBy: req.user.id,
+          });
+          seated.push({ userId: Number(g.userId), ...s });
+          await auditTx(client, req, 'org.grantor_assigned', 'organisation', org.id,
+            { userId: Number(g.userId), org: org.name, atCreation: true,
+              contactPhone: s.contactPhone, contactEmail: s.contactEmail });
+        }
+        await auditTx(client, req, 'org.created', 'organisation', org.id,
+          { name, code: clean, type, grantors: seated.length }, { after: org });
+        return { org, seated };
+      });
+      res.status(201).json({ ...out.org, grantors: out.seated });
     } catch (e) {
       if (e.code === '23505') return res.status(409).json({ message: 'An organisation with that code exists' });
-      throw e;
+      if (/relation .* does not exist|undefined_table/.test(String(e.message))) {
+        return res.status(400).json({ message: 'Grantor seats need a migration — run npm run migrate' });
+      }
+      res.status(e.status || 400).json({ message: e.message });
     }
   })
 );
