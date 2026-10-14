@@ -18,6 +18,14 @@ const ID_TYPES = [
 
 const kycVariant = { pending: 'warning', approved: 'success', rejected: 'destructive' };
 
+const DOC_OPTIONS = [
+  { value: 'id_card', label: 'ID card / scan' },
+  { value: 'utility_bill', label: 'Utility bill (proof of address)' },
+  { value: 'proof_of_address', label: 'Proof of address (other)' },
+  { value: 'passport_photo', label: 'Passport photo' },
+  { value: 'other', label: 'Other document' },
+];
+
 function KycTab() {
   const [data, setData] = useState(null);
   const [vaccount, setVaccount] = useState(null);
@@ -27,10 +35,21 @@ function KycTab() {
     residentialAddress: '', nextOfKinName: '', nextOfKinPhone: '', nextOfKinRelationship: '',
   });
   const [g, setG] = useState({ fullName: '', phone: '', email: '', relationship: '' });
+  const [docType, setDocType] = useState('utility_bill');
   const [msg, setMsg] = useState(null);
 
   const load = () => {
-    api.get('/kyc/me').then(setData).catch((e) => setMsg({ type: 'err', text: e.message }));
+    api.get('/kyc/me').then((d) => {
+      setData(d);
+      // /kyc/me now also embeds documents; keep the standalone list in sync.
+      if (d?.documents) setDocs(d.documents);
+      // Pre-fill the NIN verified at signup so the member sees it as PASSED.
+      setForm((f) => ({
+        ...f,
+        idType: f.idType !== 'nin' || !d?.profile?.id_number ? f.idType : f.idType,
+        idNumber: f.idNumber || d?.profile?.id_number || '',
+      }));
+    }).catch((e) => setMsg({ type: 'err', text: e.message }));
     api.get('/virtual-accounts/me').then(setVaccount).catch(() => setVaccount(null));
     api.get('/kyc/documents').then(setDocs).catch(() => setDocs([]));
   };
@@ -72,7 +91,7 @@ function KycTab() {
         r.onerror = () => reject(new Error('Could not read file'));
         r.readAsDataURL(f);
       });
-      await api.post('/kyc/documents', { docType: 'id_card', filename: f.name, mime: f.type, data: base64 });
+      await api.post('/kyc/documents', { docType, filename: f.name, mime: f.type, data: base64 });
       e.target.value = '';
       await load();
       setMsg({ type: 'ok', text: 'Document uploaded' });
@@ -85,10 +104,36 @@ function KycTab() {
   if (typeof vr === 'string') {
     try { vr = JSON.parse(vr); } catch { vr = null; }
   }
+  // NIN/BVN passed at signup (registration snapshot) — shown as PASSED
+  // badges so the member sees signup identity is done; only address docs
+  // remain as additional verification.
+  const ninPassed = Boolean(
+    vr?.nin?.verified || (vr?.checks || []).some((c) => ['nin', 'reg_nin'].includes(c.key) && c.passed) || profile?.id_number
+  );
+  const bvnPassed = Boolean(
+    vr?.bvn?.verified || (vr?.checks || []).some((c) => ['bvn_match', 'reg_bvn_match'].includes(c.key) && c.passed) || profile?.bvn_verified
+  );
+  const ninHolder = vr?.nin?.holder || vr?.identity?.nin?.holder || null;
+  const bvnHolder = vr?.bvn?.holder || vr?.identity?.bvn?.holder || null;
 
   return (
     <div className="space-y-6 max-w-2xl">
       {msg && <div className={`text-sm p-3 rounded-md ${msg.type === 'ok' ? 'bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300'}`}>{msg.text}</div>}
+
+      {(ninPassed || bvnPassed) && (
+        <div className="flex flex-wrap gap-2">
+          {ninPassed && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300 px-2.5 py-1 text-xs font-semibold">
+              ✓ NIN PASSED{ninHolder ? ` — ${ninHolder}` : ''}
+            </span>
+          )}
+          {bvnPassed && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300 px-2.5 py-1 text-xs font-semibold">
+              ✓ BVN PASSED{bvnHolder ? ` — ${bvnHolder}` : ''}
+            </span>
+          )}
+        </div>
+      )}
 
       <Card>
         <CardHeader>
@@ -172,7 +217,7 @@ function KycTab() {
       <Card>
         <CardHeader>
           <CardTitle>Identity Documents ({docs.length}/5)</CardTitle>
-          <CardDescription>ID scans or photos (jpg, png, pdf ≤ 5MB)</CardDescription>
+          <CardDescription>ID scans, utility bill / proof of address (jpg, png, pdf ≤ 5MB)</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
           {docs.map((d) => (
@@ -185,10 +230,21 @@ function KycTab() {
             </div>
           ))}
           {docs.length < 5 && (
-            <label className="flex items-center gap-2 rounded-md border border-dashed px-3 py-2.5 text-sm text-muted-foreground cursor-pointer hover:border-primary">
-              Upload document…
-              <input type="file" accept=".jpg,.jpeg,.png,.pdf" className="hidden" onChange={uploadDoc} />
-            </label>
+            <div className="space-y-2">
+              <div>
+                <Label>Document type</Label>
+                <select
+                  className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm"
+                  value={docType} onChange={(e) => setDocType(e.target.value)}
+                >
+                  {DOC_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </div>
+              <label className="flex items-center gap-2 rounded-md border border-dashed px-3 py-2.5 text-sm text-muted-foreground cursor-pointer hover:border-primary">
+                Upload {DOC_OPTIONS.find((o) => o.value === docType)?.label.toLowerCase()}…
+                <input type="file" accept=".jpg,.jpeg,.png,.pdf" className="hidden" onChange={uploadDoc} />
+              </label>
+            </div>
           )}
         </CardContent>
       </Card>

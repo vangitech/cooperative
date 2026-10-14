@@ -30,6 +30,18 @@ router.post(
     if (!nextOfKinName || !nextOfKinPhone)
       return res.status(400).json({ message: 'Next of kin name and phone are required' });
 
+    // Never wipe the registration identity snapshot (NIN/BVN PASSED): the
+    // stored BVN feeds the system pass and the registry result is merged.
+    let storedBvn = null;
+    let identitySnapshot = null;
+    try {
+      const prev = await query('SELECT bvn, bvn_result, verification_result FROM kyc_profiles WHERE user_id = $1', [req.user.id]);
+      storedBvn = prev.rows[0]?.bvn || null;
+      const vr = prev.rows[0]?.verification_result;
+      identitySnapshot = typeof vr === 'string' ? JSON.parse(vr) : vr;
+    } catch (e) {
+      if (!/column .* does not exist|undefined_column/.test(String(e.message))) throw e;
+    }
     const { rows } = await query(
       `INSERT INTO kyc_profiles
          (user_id, dob, gender, occupation, employer, id_type, id_number,
@@ -61,14 +73,29 @@ router.post(
       const verification = await verifyKyc(query, {
         userId: req.user.id, email: req.user.email, phone: u.rows[0]?.phone,
         firstName: req.user.first_name, lastName: req.user.last_name, dob,
-        idType, idNumber, documents: docs.rows,
+        idType, idNumber, bvn: storedBvn || undefined, documents: docs.rows,
       });
+      // Merge the registration NIN/BVN PASSED snapshot so the member keeps
+      // seeing their signup identity as passed alongside the new checks.
+      const merged = { ...verification };
+      if (identitySnapshot?.nin?.verified || identitySnapshot?.bvn?.verified) {
+        merged.identity = {
+          nin: identitySnapshot.nin || null,
+          bvn: identitySnapshot.bvn || null,
+        };
+        const seen = new Set(merged.checks.map((c) => c.key));
+        for (const c of (identitySnapshot.checks || [])) {
+          if (['nin', 'bvn_match'].includes(c.key) && !seen.has(`reg_${c.key}`)) {
+            merged.checks.unshift({ ...c, key: `reg_${c.key}` });
+          }
+        }
+      }
       await query(
         `UPDATE kyc_profiles SET verification_result = $1,
           verified_at = CASE WHEN $2 THEN NOW() ELSE NULL END WHERE user_id = $3`,
-        [JSON.stringify(verification), verification.passed, req.user.id]
+        [JSON.stringify(merged), verification.passed, req.user.id]
       );
-      rows[0].verification_result = verification;
+      rows[0].verification_result = merged;
     } catch (e) {
       console.error('kyc verification failed:', e.message);
     }
@@ -76,7 +103,9 @@ router.post(
   })
 );
 
-// Member views their own KYC profile + guarantors.
+// Member views their own KYC profile + guarantors + documents (drives the
+// dashboard "additional verification" card: NIN/BVN PASSED from signup plus
+// which address documents like utility bill are still missing).
 router.get(
   '/me',
   authenticate,
@@ -86,7 +115,19 @@ router.get(
       'SELECT * FROM guarantors WHERE user_id = $1 ORDER BY created_at',
       [req.user.id]
     );
-    res.json({ profile: profile.rows[0] || null, guarantors: guarantors.rows });
+    const docs = await query(
+      `SELECT id, doc_type, filename, mime, size_bytes, created_at
+       FROM kyc_documents WHERE user_id = $1 ORDER BY created_at`,
+      [req.user.id]
+    );
+    let p = profile.rows[0] || null;
+    if (p && typeof p.verification_result === 'string') {
+      try { p = { ...p, verification_result: JSON.parse(p.verification_result) }; } catch { /* keep raw */ }
+    }
+    if (p && typeof p.bvn_result === 'string') {
+      try { p = { ...p, bvn_result: JSON.parse(p.bvn_result) }; } catch { /* keep raw */ }
+    }
+    res.json({ profile: p, guarantors: guarantors.rows, documents: docs.rows });
   })
 );
 

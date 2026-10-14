@@ -14,7 +14,7 @@ import coopTeam from '@/assets/Coop.jpg';
 const STEPS = ['Work', 'ID', 'BVN', 'Email', 'Details'];
 
 export default function Register() {
-  const { setUser, logout } = useAuth();
+  const { setUser } = useAuth();
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
   const [session, setSession] = useState(null);
@@ -25,11 +25,12 @@ export default function Register() {
   const [bvn, setBvn] = useState('');
   const [idName, setIdName] = useState('');
   const [bvnName, setBvnName] = useState('');
+  const [idPassed, setIdPassed] = useState(false);
+  const [bvnPassed, setBvnPassed] = useState(false);
   const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
   const [sentTo, setSentTo] = useState('');
   const [form, setForm] = useState({ firstName: '', lastName: '', password: '', phone: '', address: '' });
-  const [pending, setPending] = useState(null);
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [loading, setLoading] = useState(false);
@@ -67,11 +68,12 @@ export default function Register() {
     const r = await api.post('/auth/register/verify-identity', { sessionToken: session, idNumber });
     const name = r.fullName || '';
     setIdName(name);
+    setIdPassed(true);
     const split = splitName(name);
     if (split) setForm((f) => ({ ...f, firstName: f.firstName || split.firstName, lastName: f.lastName || split.lastName }));
     setInfo(employmentType === 'private'
-      ? name ? `NIN verified — it belongs to ${name}.` : 'NIN verified against the registry.'
-      : 'IPPIS number accepted.');
+      ? name ? `NIN PASSED — verified, it belongs to ${name}.` : 'NIN PASSED — verified against the registry.'
+      : 'IPPIS number accepted — PASSED.');
     setStep(2);
   });
 
@@ -79,9 +81,10 @@ export default function Register() {
     const r = await api.post('/auth/register/verify-bvn', { sessionToken: session, bvn });
     const name = r.fullName || '';
     setBvnName(name);
+    setBvnPassed(true);
     const split = splitName(name);
     if (split) setForm((f) => ({ ...f, firstName: f.firstName || split.firstName, lastName: f.lastName || split.lastName }));
-    setInfo(name ? `BVN verified — it belongs to ${name}.` : 'BVN verified and matched.');
+    setInfo(name ? `BVN PASSED — verified, it belongs to ${name}.` : 'BVN PASSED — verified and matched.');
     setStep(3);
   });
 
@@ -98,15 +101,20 @@ export default function Register() {
   });
 
   const complete = () => run(async () => {
+    // NIN + BVN already PASSED server-side — the account is created active
+    // and the member is signed straight in (no admin approval). A wrong
+    // BVN/NIN can never reach here: the verify steps above block progress
+    // until the registry returns verified.
     const data = await api.post('/auth/register/complete', { sessionToken: session, ...form });
-    if (data.user.status !== 'active') {
-      logout();
-      setPending({ virtualAccount: data.virtualAccount || null, memberNo: data.user.member_no });
-    } else {
-      setToken(data.token);
-      setUser(data.user);
-      navigate('/dashboard');
-    }
+    setToken(data.token);
+    setUser(data.user);
+    navigate('/dashboard', {
+      state: {
+        justRegistered: true,
+        identity: data.identity || null,
+        virtualAccount: data.virtualAccount || null,
+      },
+    });
   });
 
   const isPrivate = employmentType === 'private';
@@ -122,7 +130,7 @@ export default function Register() {
         />
         <h1 className="text-4xl font-bold mb-3 text-center">Join the Cooperative</h1>
         <p className="text-lg opacity-90 text-center">
-          Verified identity, verified email, member ID in minutes.
+          NIN + BVN verified at signup — signed in instantly, no admin approval.
         </p>
       </div>
 
@@ -143,31 +151,7 @@ export default function Register() {
             {error && <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md mb-4">{error}</div>}
             {info && <div className="text-sm bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300 p-3 rounded-md mb-4">{info}</div>}
 
-            {pending ? (
-              <div className="space-y-4 text-center py-4">
-                <div className="text-sm bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300 p-4 rounded-md">
-                  Application received. An admin will review it shortly —
-                  you'll be able to sign in once approved.
-                  {pending.memberNo && (
-                    <p className="mt-2 font-semibold">Your member ID: <span className="font-mono">{pending.memberNo}</span></p>
-                  )}
-                </div>
-                {pending.virtualAccount ? (
-                  <div className="text-sm border rounded-md p-4 space-y-1">
-                    <p className="text-muted-foreground">Your funding account (bank transfer from any app):</p>
-                    <p className="text-2xl font-mono font-bold tracking-wider">{pending.virtualAccount.account_number}</p>
-                    <p className="text-muted-foreground">{pending.virtualAccount.bank_name}</p>
-                  </div>
-                ) : (
-                  <div className="text-sm text-muted-foreground border rounded-md p-4">
-                    Your personal funding account is being set up — it will appear in your wallet after approval.
-                  </div>
-                )}
-                <Button asChild variant="outline" className="w-full">
-                  <Link to="/login">Back to Sign in</Link>
-                </Button>
-              </div>
-            ) : step === 0 ? (
+            {step === 0 ? (
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-3">
                   <button
@@ -222,8 +206,8 @@ export default function Register() {
                   />
                   <p className="text-xs text-muted-foreground mt-1">
                     {isPrivate
-                      ? 'Checked live against the national registry.'
-                      : 'Format + duplicate checked; payroll cross-check follows.'}
+                      ? 'Checked live against the national registry — you cannot continue until it passes. Enter the correct NIN.'
+                      : 'Format + duplicate checked; payroll cross-check follows. You cannot continue until it passes.'}
                   </p>
                 </div>
                 <Button className="w-full" disabled={loading || !idNumber} onClick={verifyId}>
@@ -232,14 +216,20 @@ export default function Register() {
               </div>
             ) : step === 2 ? (
               <div className="space-y-4">
-                <div className="flex items-center gap-2 text-sm text-green-700 dark:text-green-300">
-                  <CheckCircle2 className="h-4 w-4" /> {idName ? `ID verified — ${idName}` : 'ID verified — now your BVN'}
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  {idPassed && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300 px-2.5 py-1 text-xs font-semibold">
+                      <CheckCircle2 className="h-3.5 w-3.5" /> {isPrivate ? 'NIN' : 'IPPIS'} PASSED{idName ? ` — ${idName}` : ''}
+                    </span>
+                  )}
                 </div>
                 <div>
                   <Label>BVN (11 digits)</Label>
                   <Input value={bvn} onChange={(e) => setBvn(e.target.value.replace(/\D/g, ''))}
                          inputMode="numeric" maxLength={11} placeholder="Your 11-digit BVN" />
-                  <p className="text-xs text-muted-foreground mt-1">Matched against the registry and your {isPrivate ? 'NIN' : 'identity'}.</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Matched against the registry and your {isPrivate ? 'NIN' : 'identity'} — provide the correct BVN to continue; a wrong BVN blocks registration.
+                  </p>
                 </div>
                 <Button className="w-full" disabled={loading || bvn.length !== 11} onClick={verifyBvn}>
                   {loading ? 'Verifying…' : 'Verify BVN'}
@@ -247,8 +237,17 @@ export default function Register() {
               </div>
             ) : step === 3 ? (
               <div className="space-y-4">
-                <div className="flex items-center gap-2 text-sm text-green-700 dark:text-green-300">
-                  <CheckCircle2 className="h-4 w-4" /> {bvnName ? `BVN verified — ${bvnName}` : 'BVN verified — confirm your email'}
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  {idPassed && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300 px-2.5 py-1 text-xs font-semibold">
+                      <CheckCircle2 className="h-3.5 w-3.5" /> {isPrivate ? 'NIN' : 'IPPIS'} PASSED
+                    </span>
+                  )}
+                  {bvnPassed && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300 px-2.5 py-1 text-xs font-semibold">
+                      <CheckCircle2 className="h-3.5 w-3.5" /> BVN PASSED{bvnName ? ` — ${bvnName}` : ''}
+                    </span>
+                  )}
                 </div>
                 <div>
                   <Label>Email</Label>
@@ -276,14 +275,22 @@ export default function Register() {
               </div>
             ) : (
               <div className="space-y-4">
-                <div className="flex items-center gap-2 text-sm text-green-700 dark:text-green-300">
-                  <CheckCircle2 className="h-4 w-4" /> Email verified — your details
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300 px-2.5 py-1 text-xs font-semibold">
+                    <CheckCircle2 className="h-3.5 w-3.5" /> {isPrivate ? 'NIN' : 'IPPIS'} PASSED
+                  </span>
+                  <span className="inline-flex items-center gap-1 rounded-full bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300 px-2.5 py-1 text-xs font-semibold">
+                    <CheckCircle2 className="h-3.5 w-3.5" /> BVN PASSED
+                  </span>
+                  <span className="inline-flex items-center gap-1 rounded-full bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300 px-2.5 py-1 text-xs font-semibold">
+                    <CheckCircle2 className="h-3.5 w-3.5" /> Email verified
+                  </span>
                 </div>
                 {(idName || bvnName) && (
                   <div className="text-xs rounded-md border p-3 space-y-0.5">
-                    {idName && <p><span className="text-muted-foreground">NIN holder:</span> <span className="font-semibold">{idName}</span></p>}
-                    {bvnName && <p><span className="text-muted-foreground">BVN holder:</span> <span className="font-semibold">{bvnName}</span></p>}
-                    <p className="text-muted-foreground">Names below were filled from the registry — correct them if needed.</p>
+                    {idName && <p><span className="text-muted-foreground">{isPrivate ? 'NIN' : 'ID'} holder (PASSED):</span> <span className="font-semibold">{idName}</span></p>}
+                    {bvnName && <p><span className="text-muted-foreground">BVN holder (PASSED):</span> <span className="font-semibold">{bvnName}</span></p>}
+                    <p className="text-muted-foreground">Names below were filled from the registry — correct them if needed. Your account is created active and you are signed in immediately.</p>
                   </div>
                 )}
                 <div className="grid grid-cols-2 gap-3">
@@ -294,7 +301,7 @@ export default function Register() {
                 <div><Label>Phone</Label><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></div>
                 <div><Label>Address</Label><Textarea rows={2} value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} /></div>
                 <Button className="w-full" disabled={loading || !form.firstName || !form.lastName || !form.password} onClick={complete}>
-                  {loading ? 'Creating account…' : 'Create account'}
+                  {loading ? 'Creating account…' : 'Create account & sign in'}
                 </Button>
               </div>
             )}

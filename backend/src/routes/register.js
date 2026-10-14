@@ -16,10 +16,18 @@ import { sendMail } from '../lib/mailer.js';
 //   2. POST /verify-identity  { sessionToken, idNumber, firstName?, lastName? }
 //        private → NIN (format + unique + Bytid registry)
 //        civil servant → IPPIS (format + unique; no public registry exists)
+//        The client CANNOT advance until the registry returns verified — a
+//        wrong NIN/IPPIS must be corrected before "NIN PASSED" shows.
 //   3. POST /verify-bvn       { sessionToken, bvn } → Bytid BVN (+ surname cross-check)
+//        Same gate: only a registry-verified BVN (matching the NIN holder)
+//        unlocks the next step and renders "BVN PASSED".
 //   4. POST /send-code        { sessionToken, email } → 6-digit code by mail
 //   5. POST /verify-code      { sessionToken, email, code }
 //   6. POST /complete         { sessionToken, firstName, lastName, password, phone?, address? }
+//        Requires all three verifications, creates an ACTIVE member with a
+//        KYC identity snapshot, returns a JWT — the user is signed straight
+//        in, no admin approval. Address documents (utility bill) are uploaded
+//        later from the dashboard as "additional verification".
 // Every gate is re-checked server-side from the intent row — the client can
 // never forge a "verified" flag. Replaces the old instant POST /auth/register.
 
@@ -130,6 +138,14 @@ router.post('/verify-bvn', authLimiter, asyncHandler(async (req, res) => {
   if (!it.id_verified) return res.status(409).json({ message: 'Verify NIN/IPPIS first' });
   const clean = String(bvn || '').trim();
   if (!/^\d{11}$/.test(clean)) return res.status(400).json({ message: 'BVN must be exactly 11 digits' });
+  // One person, one BVN — block reuse before hitting the provider.
+  // (Column added by latest schema; older DBs without it simply skip this.)
+  try {
+    const dup = await query('SELECT user_id FROM kyc_profiles WHERE bvn = $1 LIMIT 1', [clean]);
+    if (dup.rows[0]) return res.status(409).json({ message: 'This BVN is already registered' });
+  } catch (e) {
+    if (!/column .* does not exist|undefined_column/.test(String(e.message))) throw e;
+  }
   if (!bytidConfigured()) {
     return res.status(503).json({ message: 'Identity verification service unavailable — try again shortly' });
   }
@@ -253,6 +269,38 @@ router.post('/complete', authLimiter, async (req, res) => {
     }
 
     const hash = await bcrypt.hash(password, 10);
+    // Identity (NIN/IPPIS + BVN + email) is fully verified at this point, so
+    // the member is created ACTIVE and signed in immediately — no admin
+    // approval needed. A KYC row snapshots the registry passes ("NIN PASSED /
+    // BVN PASSED") and stays pending until address documents (utility bill)
+    // are uploaded from the dashboard and reviewed.
+    const idRes = it.id_result || {};
+    const bvnRes = it.bvn_result || {};
+    const ninHolder = idRes.record?.full_name || null;
+    const bvnHolder = bvnRes.record?.full_name || null;
+    const identity = {
+      passed: true,
+      source: 'registration',
+      score: 100,
+      checks: [
+        {
+          key: 'nin',
+          label: it.employment_type === 'private' ? 'NIN verification' : 'IPPIS check',
+          passed: true,
+          detail: ninHolder ? `verified — belongs to ${ninHolder}` : 'verified',
+        },
+        {
+          key: 'bvn_match',
+          label: 'BVN verification',
+          passed: true,
+          detail: bvnHolder
+            ? `verified — belongs to ${bvnHolder}${bvnRes.crossCheck ? ` (${bvnRes.crossCheck})` : ''}`
+            : 'verified and matched',
+        },
+      ],
+      nin: { verified: true, holder: ninHolder, detail: idRes.detail || null },
+      bvn: { verified: true, holder: bvnHolder, detail: bvnRes.detail || null },
+    };
     const user = await withTransaction(async (client) => {
       const affiliationId = it.org_id || (await client.query(
         `SELECT id FROM organisations WHERE code = 'GEN'`
@@ -260,7 +308,7 @@ router.post('/complete', authLimiter, async (req, res) => {
       const memberNo = await nextMemberNo(client, affiliationId);
       const { rows } = await client.query(
         `INSERT INTO users (first_name,last_name,email,password_hash,phone,address,status,member_no,employment_type,ippis_number,email_verified)
-         VALUES ($1,$2,$3,$4,$5,$6,'pending',$7,$8,$9,true)
+         VALUES ($1,$2,$3,$4,$5,$6,'active',$7,$8,$9,true)
          RETURNING id, first_name, last_name, email, role, status, member_no, employment_type, created_at`,
         [firstName, lastName, it.email, hash, phone || null, address || null,
          memberNo, it.employment_type, it.employment_type === 'civil_servant' ? it.id_number : null]
@@ -271,8 +319,42 @@ router.post('/complete', authLimiter, async (req, res) => {
          VALUES ($1,$2,$3,true)`,
         [rows[0].id, affiliationId, memberNo]
       );
+      // Snapshot the registry passes so KYC/dashboard can render PASSED
+      // badges without re-calling the provider. Plain BVN follows the same
+      // posture as the plain NIN in id_number; the intent row is wiped below.
+      try {
+        await client.query(
+          `INSERT INTO kyc_profiles (user_id, id_type, id_number, bvn, bvn_verified, bvn_result, verification_result, status)
+           VALUES ($1,$2,$3,$4,true,$5,$6,'pending')
+           ON CONFLICT (user_id) DO NOTHING`,
+          [rows[0].id,
+           it.employment_type === 'private' ? 'nin' : null,
+           it.employment_type === 'private' ? it.id_number : null,
+           it.bvn || null,
+           JSON.stringify(bvnRes),
+           JSON.stringify(identity)]
+        );
+      } catch (e) {
+        // Older DBs without the bvn columns: fall back to the base snapshot.
+        if (/column .* does not exist|undefined_column/.test(String(e.message))) {
+          await client.query(
+            `INSERT INTO kyc_profiles (user_id, id_type, id_number, verification_result, status)
+             VALUES ($1,$2,$3,$4,'pending')
+             ON CONFLICT (user_id) DO NOTHING`,
+            [rows[0].id,
+             it.employment_type === 'private' ? 'nin' : null,
+             it.employment_type === 'private' ? it.id_number : null,
+             JSON.stringify(identity)]
+          );
+        } else if (e.code === '23505') {
+          throw Object.assign(new Error('This BVN or NIN is already registered'), { code: '23505' });
+        } else {
+          throw e;
+        }
+      }
       await auditTx(client, req, 'member.onboarded', 'user', rows[0].id,
-        { email: rows[0].email, memberNo, employmentType: it.employment_type, channel: 'self' });
+        { email: rows[0].email, memberNo, employmentType: it.employment_type, channel: 'self',
+          ninVerified: true, bvnVerified: true });
       // Single-use: strip secrets, close the session.
       await client.query(
         `UPDATE registration_intents
@@ -290,7 +372,7 @@ router.post('/complete', authLimiter, async (req, res) => {
       console.error('virtual account deferred:', e.message);
     }
 
-    res.status(201).json({ token: signToken(user), user, virtualAccount });
+    res.status(201).json({ token: signToken(user), user, virtualAccount, identity });
     audit(req, 'auth.register', 'user', user.id,
       { email: user.email, employmentType: it.employment_type },
       { actorId: user.id, actorRole: user.role });

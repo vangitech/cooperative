@@ -412,6 +412,18 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS ippis_number VARCHAR(30) UNIQUE;
 ALTER TABLE kyc_profiles ADD COLUMN IF NOT EXISTS id_document_url TEXT;
 ALTER TABLE kyc_profiles ADD COLUMN IF NOT EXISTS verification_result JSONB;
 ALTER TABLE kyc_profiles ADD COLUMN IF NOT EXISTS verified_at TIMESTAMPTZ;
+-- Registration identity snapshot: NIN/BVN verified at signup via the
+-- registry. Stored here so the member dashboard + admin file can show
+-- "NIN PASSED / BVN PASSED" without re-querying the provider. BVN is
+-- unique per member (one person, one BVN).
+ALTER TABLE kyc_profiles ADD COLUMN IF NOT EXISTS bvn VARCHAR(20);
+ALTER TABLE kyc_profiles ADD COLUMN IF NOT EXISTS bvn_verified BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE kyc_profiles ADD COLUMN IF NOT EXISTS bvn_result JSONB;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'kyc_profiles_bvn_unique') THEN
+    ALTER TABLE kyc_profiles ADD CONSTRAINT kyc_profiles_bvn_unique UNIQUE (bvn);
+  END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS kyc_documents (
   id SERIAL PRIMARY KEY,

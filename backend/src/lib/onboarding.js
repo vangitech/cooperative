@@ -11,6 +11,11 @@ export const ID_TYPES = ['nin', 'drivers_license', 'voters_card', 'passport'];
 export const DOC_MIMES = ['image/jpeg', 'image/png', 'application/pdf'];
 export const MAX_DOC_BYTES = 5 * 1024 * 1024;
 
+// Post-signup "additional verification" documents. Identity is already
+// proven at registration (NIN + BVN registry pass); once logged in the
+// member completes proof-of-address / extra ID scans from the dashboard.
+export const KYC_DOC_TYPES = ['id_card', 'utility_bill', 'proof_of_address', 'passport_photo', 'other'];
+
 // Validate one base64 identity document. Returns { bytes, size } or throws 400.
 export function validateDocument({ docType, filename, mime, data }) {
   const err = (message) => {
@@ -19,6 +24,7 @@ export function validateDocument({ docType, filename, mime, data }) {
     throw e;
   };
   if (!filename || !mime || !data) err('Each document needs filename, mime and data');
+  if (docType && !KYC_DOC_TYPES.includes(docType)) err(`Unknown document type: ${docType}`);
   if (!DOC_MIMES.includes(mime)) err(`Document type not allowed (jpg, png, pdf only): ${filename}`);
   let bytes;
   try {
