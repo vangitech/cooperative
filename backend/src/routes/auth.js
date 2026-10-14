@@ -5,8 +5,6 @@ import { query, withTransaction } from '../db.js';
 import { authenticate } from '../middleware/auth.js';
 import { asyncHandler } from '../utils/helpers.js';
 import { audit, hashToken, newResetToken } from '../lib/audit.js';
-import { assignVirtualAccount } from '../lib/virtualAccounts.js';
-import { nextMemberNo } from '../lib/onboarding.js';
 import { sendMail, appUrl } from '../lib/mailer.js';
 import { authLimiter, forgotLimiter } from '../lib/rateLimit.js';
 
@@ -17,66 +15,11 @@ const signToken = (user) =>
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   });
 
+
+// Instant signup retired — registration is staged (identity → BVN → email
+// code → details) under /auth/register/*. This stub keeps old clients honest.
 router.post('/register', authLimiter, async (req, res) => {
-  try {
-    const { firstName, lastName, email, password, phone, address, nin, bvn, orgId } = req.body;
-    if (!firstName || !lastName || !email || !password)
-      return res.status(400).json({ message: 'First name, last name, email and password are required' });
-    if (password.length < 6)
-      return res.status(400).json({ message: 'Password must be at least 6 characters' });
-    for (const [label, val] of [['NIN', nin], ['BVN', bvn]]) {
-      if (val && !/^\d{11}$/.test(String(val).trim()))
-        return res.status(400).json({ message: `${label} must be 11 digits` });
-    }
-
-    const exists = await query('SELECT id FROM users WHERE email = $1', [email.toLowerCase()]);
-    if (exists.rows.length) return res.status(409).json({ message: 'Email already registered' });
-
-    const hash = await bcrypt.hash(password, 10);
-
-    // Affiliation: requested unit/branch/department, else General Members.
-    const org = await query(
-      `SELECT id FROM organisations WHERE id = $1 AND status = 'active'`,
-      [orgId || 0]
-    );
-    const affiliationId = org.rows[0]?.id || (await query(
-      `SELECT id FROM organisations WHERE code = 'GEN'`
-    )).rows[0].id;
-
-    const user = await withTransaction(async (client) => {
-      const memberNo = await nextMemberNo(client, affiliationId);
-      const { rows } = await client.query(
-        `INSERT INTO users (first_name,last_name,email,password_hash,phone,address,status,member_no)
-         VALUES ($1,$2,$3,$4,$5,$6,'pending',$7)
-         RETURNING id, first_name, last_name, email, role, status, member_no, created_at`,
-        [firstName, lastName, email.toLowerCase(), hash, phone || null, address || null, memberNo]
-      );
-      await client.query('INSERT INTO wallets (user_id, balance) VALUES ($1, 0)', [rows[0].id]);
-      await client.query(
-        `INSERT INTO organisation_members (user_id, org_id, member_no, is_primary)
-         VALUES ($1,$2,$3,true)`,
-        [rows[0].id, affiliationId, memberNo]
-      );
-      return rows[0];
-    });
-
-    // Funding account is best-effort: registration succeeds even if
-    // Flutterwave is unreachable. NIN/BVN (optional at signup, or from
-    // KYC later) unlocks immediate assignment; otherwise admin can retry.
-    let virtualAccount = null;
-    try {
-      const clean = (v) => (v && /^\d{11}$/.test(String(v).trim()) ? String(v).trim() : undefined);
-      virtualAccount = await assignVirtualAccount(user.id, { nin: clean(nin), bvn: clean(bvn) });
-    } catch (e) {
-      console.error('virtual account deferred:', e.message);
-    }
-
-    res.status(201).json({ token: signToken(user), user, virtualAccount });
-    audit(req, 'auth.register', 'user', user.id, { email: user.email }, { actorId: user.id, actorRole: user.role });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: 'Server error' });
-  }
+  res.status(410).json({ message: 'Use staged registration: POST /auth/register/start' });
 });
 
 router.post('/login', authLimiter, async (req, res) => {

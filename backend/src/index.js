@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import authRoutes from './routes/auth.js';
+import registerRoutes from './routes/register.js';
 import walletRoutes from './routes/wallet.js';
 import savingsRoutes from './routes/savings.js';
 import loanRoutes from './routes/loans.js';
@@ -37,6 +38,7 @@ app.use(express.json({ limit: '10mb' })); // KYC document uploads (base64) need 
 app.get('/api/health', (_, res) => res.json({ ok: true, service: 'MPCS API' }));
 
 app.use('/api/auth', authRoutes);
+app.use('/api/auth/register', registerRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/savings', savingsRoutes);
 app.use('/api/loans', loanRoutes);
