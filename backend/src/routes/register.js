@@ -118,7 +118,9 @@ router.post('/verify-identity', authLimiter, asyncHandler(async (req, res) => {
     id, JSON.stringify(result), it.id,
   ]);
   audit(req, 'register.id_verified', 'registration', it.id, { employmentType: it.employment_type });
-  res.json({ verified: true, next: 'bvn' });
+  // Echo the registry holder name so the UI shows WHO the ID belongs to
+  // (and can pre-fill the Details step) instead of a bare "verified".
+  res.json({ verified: true, next: 'bvn', fullName: result.record?.full_name || null });
 }));
 
 router.post('/verify-bvn', authLimiter, asyncHandler(async (req, res) => {
@@ -161,7 +163,7 @@ router.post('/verify-bvn', authLimiter, asyncHandler(async (req, res) => {
     clean, JSON.stringify(result), it.id,
   ]);
   audit(req, 'register.bvn_verified', 'registration', it.id, { employmentType: it.employment_type });
-  res.json({ verified: true, next: 'email-code' });
+  res.json({ verified: true, next: 'email-code', fullName: reg.record?.full_name || null });
 }));
 
 router.post('/send-code', authLimiter, asyncHandler(async (req, res) => {
@@ -193,8 +195,14 @@ router.post('/send-code', authLimiter, asyncHandler(async (req, res) => {
       html: `<p>Your MPCS verification code is:</p><p style="font-size:28px;font-weight:bold;letter-spacing:4px">${code}</p><p>It expires in 10 minutes. If you didn't request this, ignore this email.</p>`,
     });
   } catch (e) {
-    // Provider/config failure (bad key, unverified domain) — surfaced, not swallowed.
-    return res.status(502).json({ message: `Email delivery failed: ${e.message}` });
+    // Provider/config failure (bad key, unverified domain, or Resend test
+    // sender which only delivers to the account owner's inbox) — surfaced
+    // with the fix, not swallowed.
+    const msg = String(e.message || '');
+    const hint = /own email|testing|domain|verify/i.test(msg)
+      ? ' Tip: Resend test senders only deliver to the account owner’s inbox — verify a domain in Resend (or test with the owner email) to receive codes.'
+      : '';
+    return res.status(502).json({ message: `Email delivery failed: ${msg}.${hint}` });
   }
   audit(req, 'register.code_sent', 'registration', it.id, { to: maskEmail(clean) });
   res.json({ sent: true, to: maskEmail(clean), expiresIn: CODE_TTL_SEC });

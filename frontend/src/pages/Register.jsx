@@ -23,6 +23,8 @@ export default function Register() {
   const [orgId, setOrgId] = useState('');
   const [idNumber, setIdNumber] = useState('');
   const [bvn, setBvn] = useState('');
+  const [idName, setIdName] = useState('');
+  const [bvnName, setBvnName] = useState('');
   const [email, setEmail] = useState('');
   const [code, setCode] = useState('');
   const [sentTo, setSentTo] = useState('');
@@ -55,15 +57,31 @@ export default function Register() {
     setStep(1);
   });
 
+  const splitName = (full) => {
+    const parts = String(full || '').trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return null;
+    return { firstName: parts[0], lastName: parts.slice(1).join(' ') };
+  };
+
   const verifyId = () => run(async () => {
-    await api.post('/auth/register/verify-identity', { sessionToken: session, idNumber });
-    setInfo(employmentType === 'private' ? 'NIN verified against the registry.' : 'IPPIS number accepted.');
+    const r = await api.post('/auth/register/verify-identity', { sessionToken: session, idNumber });
+    const name = r.fullName || '';
+    setIdName(name);
+    const split = splitName(name);
+    if (split) setForm((f) => ({ ...f, firstName: f.firstName || split.firstName, lastName: f.lastName || split.lastName }));
+    setInfo(employmentType === 'private'
+      ? name ? `NIN verified — it belongs to ${name}.` : 'NIN verified against the registry.'
+      : 'IPPIS number accepted.');
     setStep(2);
   });
 
   const verifyBvn = () => run(async () => {
-    await api.post('/auth/register/verify-bvn', { sessionToken: session, bvn });
-    setInfo('BVN verified and matched.');
+    const r = await api.post('/auth/register/verify-bvn', { sessionToken: session, bvn });
+    const name = r.fullName || '';
+    setBvnName(name);
+    const split = splitName(name);
+    if (split) setForm((f) => ({ ...f, firstName: f.firstName || split.firstName, lastName: f.lastName || split.lastName }));
+    setInfo(name ? `BVN verified — it belongs to ${name}.` : 'BVN verified and matched.');
     setStep(3);
   });
 
@@ -215,7 +233,7 @@ export default function Register() {
             ) : step === 2 ? (
               <div className="space-y-4">
                 <div className="flex items-center gap-2 text-sm text-green-700 dark:text-green-300">
-                  <CheckCircle2 className="h-4 w-4" /> ID verified — now your BVN
+                  <CheckCircle2 className="h-4 w-4" /> {idName ? `ID verified — ${idName}` : 'ID verified — now your BVN'}
                 </div>
                 <div>
                   <Label>BVN (11 digits)</Label>
@@ -230,22 +248,28 @@ export default function Register() {
             ) : step === 3 ? (
               <div className="space-y-4">
                 <div className="flex items-center gap-2 text-sm text-green-700 dark:text-green-300">
-                  <CheckCircle2 className="h-4 w-4" /> BVN verified — confirm your email
+                  <CheckCircle2 className="h-4 w-4" /> {bvnName ? `BVN verified — ${bvnName}` : 'BVN verified — confirm your email'}
                 </div>
                 <div>
                   <Label>Email</Label>
                   <div className="flex gap-2">
                     <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
-                    <Button variant="outline" disabled={loading || !email} onClick={sendCode}>Send code</Button>
+                    <Button variant="outline" disabled={loading || !email} onClick={sendCode}>
+                      {sentTo ? 'Resend' : 'Send code'}
+                    </Button>
                   </div>
+                  {sentTo && (
+                    <p className="text-xs text-muted-foreground mt-1">Code sent to {sentTo} — expires in 10 minutes.</p>
+                  )}
                 </div>
-                {sentTo && (
-                  <div>
-                    <Label>6-digit code sent to {sentTo}</Label>
-                    <Input value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
-                           inputMode="numeric" maxLength={6} placeholder="••••••" />
-                  </div>
-                )}
+                <div>
+                  <Label>6-digit code{sentTo ? ` sent to ${sentTo}` : ''}</Label>
+                  <Input value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+                         inputMode="numeric" maxLength={6} placeholder="••••••" />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {sentTo ? 'Enter the code from your inbox, then Verify code.' : 'Send the code first, then enter it here.'}
+                  </p>
+                </div>
                 <Button className="w-full" disabled={loading || code.length !== 6} onClick={verifyCode}>
                   {loading ? 'Checking…' : 'Verify code'}
                 </Button>
@@ -255,6 +279,13 @@ export default function Register() {
                 <div className="flex items-center gap-2 text-sm text-green-700 dark:text-green-300">
                   <CheckCircle2 className="h-4 w-4" /> Email verified — your details
                 </div>
+                {(idName || bvnName) && (
+                  <div className="text-xs rounded-md border p-3 space-y-0.5">
+                    {idName && <p><span className="text-muted-foreground">NIN holder:</span> <span className="font-semibold">{idName}</span></p>}
+                    {bvnName && <p><span className="text-muted-foreground">BVN holder:</span> <span className="font-semibold">{bvnName}</span></p>}
+                    <p className="text-muted-foreground">Names below were filled from the registry — correct them if needed.</p>
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-3">
                   <div><Label>First name</Label><Input required value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} /></div>
                   <div><Label>Last name</Label><Input required value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} /></div>
