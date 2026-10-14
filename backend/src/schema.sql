@@ -724,3 +724,7 @@ WHERE type = 'savings' AND description LIKE 'Recurring savings%';
 
 ALTER TABLE public.loan_reviews ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.loan_reviews FROM anon, authenticated;
+
+-- Mock funding accounts: test-mode numbers issued locally (no rail call),
+-- clearly flagged so they can never be mistaken for live rail accounts.
+ALTER TABLE virtual_accounts ADD COLUMN IF NOT EXISTS is_mock BOOLEAN NOT NULL DEFAULT false;

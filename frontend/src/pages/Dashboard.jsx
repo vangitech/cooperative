@@ -60,8 +60,11 @@ export default function Dashboard() {
                 {hidden ? masked() : formatCurrency(data.wallet?.balance)}
               </p>
               {vaccount && (
-                <p className="mt-1 text-xs text-muted-foreground font-mono tracking-wider">
+                <p className="mt-1 text-xs text-muted-foreground font-mono tracking-wider flex items-center gap-1.5">
                   {vaccount.account_number} · {vaccount.bank_name}
+                  {vaccount.is_mock && (
+                    <span className="rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300 px-1.5 py-px text-[10px] font-sans font-semibold">Test</span>
+                  )}
                 </p>
               )}
             </div>
