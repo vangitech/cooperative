@@ -55,6 +55,10 @@ router.get('/stats', requirePerm('overview.read'), asyncHandler(async (req, res)
 
 /* ---------- Members ---------- */
 router.get('/users', requirePerm('members.read'), asyncHandler(async (req, res) => {
+  // The super-admin is invisible to everyone else: only a super-admin
+  // viewer sees super_admin rows (staff.create + full staff view are
+  // super-only too).
+  const hideSuper = req.user.role !== 'super_admin';
   const { rows } = await query(`
     SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.role, u.status, u.member_no, u.email_verified, u.created_at,
            COALESCE(w.balance,0) AS balance,
@@ -67,6 +71,7 @@ router.get('/users', requirePerm('members.read'), asyncHandler(async (req, res) 
     LEFT JOIN virtual_accounts v ON v.user_id = u.id
     LEFT JOIN organisation_members m ON m.user_id = u.id AND m.is_primary AND m.status = 'active'
     LEFT JOIN organisations o ON o.id = m.org_id
+    ${hideSuper ? `WHERE u.role <> 'super_admin'` : ''}
     ORDER BY u.created_at DESC
   `);
   res.json(rows);
@@ -78,6 +83,14 @@ router.patch('/users/:id/status', requirePerm('members.review'), asyncHandler(as
     return res.status(400).json({ message: 'Invalid status' });
   if (String(req.params.id) === String(req.user.id))
     return res.status(400).json({ message: 'You cannot change your own status' });
+  // The super-admin cannot be touched by anyone below super-admin (they
+  // cannot even see the account — this guards direct-ID calls).
+  if (req.user.role !== 'super_admin') {
+    const target = await query('SELECT role FROM users WHERE id = $1', [req.params.id]);
+    if (!target.rows[0]) return res.status(404).json({ message: 'User not found' });
+    if (target.rows[0].role === 'super_admin')
+      return res.status(403).json({ message: 'Insufficient permissions' });
+  }
   const { rows } = await query(
     `UPDATE users SET status=$1, updated_at=NOW() WHERE id=$2 RETURNING id, status`,
     [status, req.params.id]
@@ -136,6 +149,10 @@ router.delete('/users/:id', requirePerm('members.review'), async (req, res) => {
       const t = await client.query('SELECT id, email, role, status FROM users WHERE id = $1', [req.params.id]);
       const target = t.rows[0];
       if (!target) throw Object.assign(new Error('User not found'), { status: 404 });
+      // Super-admin accounts can only be removed by a super-admin.
+      if (target.role === 'super_admin' && req.user.role !== 'super_admin') {
+        throw Object.assign(new Error('Insufficient permissions'), { status: 403 });
+      }
       if (target.role === 'super_admin') {
         const supers = await client.query(
           `SELECT COUNT(*) FROM users WHERE role = 'super_admin' AND status = 'active' AND id <> $1`,
@@ -226,8 +243,9 @@ router.post('/staff', requirePerm('staff.manage'), async (req, res) => {
   }
 });
 
-// Staff directory (super-admin console + grantor lookup).
-router.get('/staff', requirePerm('members.read'), asyncHandler(async (req, res) => {
+// Staff directory — super-admin ONLY (sole role that can staff admins and
+// view all staff/admins). Everyone else gets 403, including other admins.
+router.get('/staff', requirePerm('staff.manage'), asyncHandler(async (req, res) => {
   const { rows } = await query(
     `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.role, u.status, u.created_at,
             o.name AS org_name, o.code AS org_code

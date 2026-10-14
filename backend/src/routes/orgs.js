@@ -34,6 +34,8 @@ router.get(
   authenticate,
   requirePerm('orgs.read'),
   asyncHandler(async (req, res) => {
+    // Super-admin is invisible here unless the viewer is a super-admin.
+    const hideSuper = req.user.role !== 'super_admin';
     const { rows } = await query(
       `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.status,
               m.member_no, m.joined_at, COALESCE(w.balance, 0) AS balance,
@@ -42,6 +44,7 @@ router.get(
        JOIN users u ON u.id = m.user_id
        LEFT JOIN wallets w ON w.user_id = u.id
        WHERE m.org_id = $1 AND m.status = 'active'
+       ${hideSuper ? `AND u.role <> 'super_admin'` : ''}
        ORDER BY u.first_name, u.last_name`,
       [req.params.id]
     );

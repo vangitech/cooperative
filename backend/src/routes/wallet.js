@@ -220,13 +220,13 @@ router.get('/resolve-recipient', asyncHandler(async (req, res) => {
     const va = await query(
       `SELECT u.id, u.first_name, u.last_name, u.email, u.status
        FROM virtual_accounts v JOIN users u ON u.id = v.user_id
-       WHERE v.account_number = $1`,
+       WHERE v.account_number = $1 ${req.user.role !== 'super_admin' ? `AND u.role <> 'super_admin'` : ''}`,
       [q]
     );
     user = va.rows[0];
   } else {
     const u = await query(
-      'SELECT id, first_name, last_name, email, status FROM users WHERE email = $1',
+      `SELECT id, first_name, last_name, email, status FROM users WHERE email = $1 ${req.user.role !== 'super_admin' ? `AND role <> 'super_admin'` : ''}`,
       [q.toLowerCase()]
     );
     user = u.rows[0];
@@ -263,6 +263,8 @@ router.post('/transfer', requireVerifiedEmail, requireAdditionalDocs, asyncHandl
     if (!target) throw new Error('Recipient not found');
     if (target.id === req.user.id) throw new Error('You cannot send to yourself');
     if (target.status !== 'active') throw new Error('Recipient account is not active');
+    if (target.role === 'super_admin' && req.user.role !== 'super_admin')
+      throw new Error('Recipient not found');
 
     const from = await client.query('SELECT * FROM wallets WHERE user_id = $1 FOR UPDATE', [req.user.id]);
     if (!from.rows[0]) throw new Error('Wallet not found');

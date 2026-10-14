@@ -137,7 +137,11 @@ export default function AdminMembers() {
     } catch (e) { toast.error(e.message); }
   };
 
-  const filtered = (users || []).filter((u) =>
+  const filtered = (users || [])
+    // The super-admin is invisible to everyone else (backend also excludes
+    // these rows for non-super viewers — this is belt and braces).
+    .filter((u) => isSuper || u.role !== 'super_admin')
+    .filter((u) =>
     `${u.first_name} ${u.last_name} ${u.email} ${u.phone || ''}`
       .toLowerCase().includes(q.toLowerCase())
   );

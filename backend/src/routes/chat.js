@@ -16,12 +16,15 @@ async function ensureParticipant(conversationId, userId) {
 
 // Contact picker: staff (admin/officer/accountant) + fellow org members.
 // Grantor = any staff-side account; group = shared organisation.
+// The super-admin never appears here unless the viewer is a super-admin.
 router.get(
   '/contacts',
   asyncHandler(async (req, res) => {
+    const hideSuper = req.user.role !== 'super_admin';
     const staff = await query(
       `SELECT id, first_name, last_name, email, role FROM users
        WHERE role IN ('super_admin','admin','officer','accountant','grantor') AND status = 'active' AND id <> $1
+       ${hideSuper ? `AND role <> 'super_admin'` : ''}
        ORDER BY role, first_name LIMIT 100`,
       [req.user.id]
     );
@@ -38,6 +41,7 @@ router.get(
          JOIN users u ON u.id = m.user_id
          LEFT JOIN organisations o ON o.id = m.org_id
          WHERE m.org_id = ANY($1) AND m.status = 'active' AND u.id <> $2 AND u.status = 'active'
+         ${hideSuper ? `AND u.role <> 'super_admin'` : ''}
          ORDER BY u.first_name LIMIT 100`,
         [orgIds, req.user.id]
       );
@@ -91,6 +95,15 @@ router.post(
       [ids]
     );
     if (found.length !== ids.length) return res.status(400).json({ message: 'One or more members not found' });
+    // Nobody may open a chat with the super-admin (invisible account) —
+    // unless they are a super-admin themselves.
+    if (req.user.role !== 'super_admin') {
+      const { rows: supers } = await query(
+        `SELECT id FROM users WHERE id = ANY($1) AND role = 'super_admin'`,
+        [ids]
+      );
+      if (supers.length) return res.status(403).json({ message: 'Insufficient permissions' });
+    }
 
     if (type === 'direct' && ids.length === 1) {
       // Reuse existing 1:1 room if present.
