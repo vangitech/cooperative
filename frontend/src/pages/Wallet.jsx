@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, download } from '@/lib/api';
+import KycRequiredModal from '@/components/KycRequiredModal';
 import { useAuth } from '@/context/AuthContext';
 import { formatCurrency, formatDateTime } from '@/lib/format';
 import { Button } from '@/components/ui/button';
@@ -40,9 +41,23 @@ export default function Wallet() {
   const [vaccount, setVaccount] = useState(null);
   const [kycStatus, setKycStatus] = useState(null);
   // Money-out gate (same rule as loans): withdrawals, transfers and bank
-  // payouts need a recent utility bill + government ID. Server enforces;
-  // this banner explains it upfront.
+  // payouts need a recent utility bill + government ID. Attempting any of
+  // them without documents pops the styled KYC modal; the server enforces.
   const [docGate, setDocGate] = useState(null);
+  const [gateOpen, setGateOpen] = useState(false);
+
+  const gateBlocked = Boolean(docGate && (!docGate.hasGovId || !docGate.utilityRecent));
+  const missingDocs = () => {
+    if (!docGate) return [];
+    return [
+      !docGate.utilityRecent && 'A recent utility bill (electricity, water or waste — within 3 months)',
+      !docGate.hasGovId && 'A valid government ID (passport, driver’s license or voter’s card)',
+    ].filter(Boolean);
+  };
+  const blockedByGate = () => {
+    if (gateBlocked) { setGateOpen(true); return true; }
+    return false;
+  };
   const [sendOpen, setSendOpen] = useState(false);
   const [sendId, setSendId] = useState('');
   const [sendAmount, setSendAmount] = useState('');
@@ -101,11 +116,15 @@ export default function Wallet() {
 
   const submit = async () => {
     setMsg(null);
+    if (blockedByGate()) return;
     try {
       await api.post(`/wallet/${open}`, { amount: Number(amount) });
       setAmount(''); setOpen(null); await load(); await refresh();
       setMsg({ type: 'ok', text: 'Transaction successful' });
-    } catch (e) { setMsg({ type: 'err', text: e.message }); }
+    } catch (e) {
+      if (open === 'withdraw' && /KYC|verification|Upload/i.test(e.message)) setGateOpen(true);
+      else setMsg({ type: 'err', text: e.message });
+    }
   };
 
   const fundOnline = async () => {
@@ -121,6 +140,7 @@ export default function Wallet() {
   };
 
   const openWithdraw = async () => {
+    if (blockedByGate()) return;
     setWdOpen(true);
     if (banks.length === 0) {
       try {
@@ -132,6 +152,7 @@ export default function Wallet() {
 
   const submitWithdraw = async () => {
     setMsg(null); setWdLoading(true);
+    if (blockedByGate()) { setWdLoading(false); setWdOpen(false); return; }
     try {
       const r = await api.post('/payments/withdraw/initiate', {
         amount: Number(wd.amount),
@@ -142,7 +163,10 @@ export default function Wallet() {
       setWd({ amount: '', bankCode: '', accountNumber: '' }); setWdOpen(false);
       await load(); await refresh();
       setMsg({ type: 'ok', text: `Withdrawal submitted (${r.reference}). Status: ${r.status}` });
-    } catch (e) { setMsg({ type: 'err', text: e.message }); }
+    } catch (e) {
+      if (/KYC|verification|Upload/i.test(e.message)) { setGateOpen(true); setWdOpen(false); }
+      else setMsg({ type: 'err', text: e.message });
+    }
     finally { setWdLoading(false); }
   };
 
@@ -163,6 +187,7 @@ export default function Wallet() {
 
   const submitSend = async () => {
     setMsg(null); setSendLoading(true);
+    if (blockedByGate()) { setSendLoading(false); setSendOpen(false); return; }
     try {
       const r = await api.post('/wallet/transfer', {
         recipient: sendId.trim(),
@@ -171,7 +196,10 @@ export default function Wallet() {
       setSendId(''); setSendAmount(''); setRecipient(null); setSendOpen(false);
       await load(); await refresh();
       setMsg({ type: 'ok', text: `Sent ${r.amount} to ${r.recipient} (${r.reference})` });
-    } catch (e) { setMsg({ type: 'err', text: e.message }); }
+    } catch (e) {
+      if (/KYC|verification|Upload/i.test(e.message)) { setGateOpen(true); setSendOpen(false); }
+      else setMsg({ type: 'err', text: e.message });
+    }
     finally { setSendLoading(false); }
   };
 
@@ -282,17 +310,6 @@ export default function Wallet() {
         </div>
       )}
 
-      {docGate && (!docGate.hasGovId || !docGate.utilityRecent) && (
-        <div className="text-sm bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-200 p-3 rounded-md">
-          Withdrawals, transfers and bank payouts are locked until you upload{' '}
-          {[
-            !docGate.utilityRecent && 'a recent utility bill (electricity, water or waste — within 3 months)',
-            !docGate.hasGovId && 'a valid government ID (passport, driver\u2019s license or voter\u2019s card)',
-          ].filter(Boolean).join(' and ')}{' '}
-          under <Link to="/profile?tab=kyc" className="font-semibold underline">Profile → KYC</Link>.
-          Deposits, savings and loan repayments still work.
-        </div>
-      )}
 
       <Card>
         <CardContent className="p-6 flex flex-col sm:flex-row sm:items-center gap-4">
@@ -323,6 +340,7 @@ export default function Wallet() {
             )}
           </div>
           <Dialog open={sendOpen} onOpenChange={(v) => {
+            if (v && blockedByGate()) return;
             setSendOpen(v);
             if (!v) { setSendId(''); setSendAmount(''); setRecipient(null); }
           }}>
@@ -469,6 +487,13 @@ export default function Wallet() {
           </Table>
         </CardContent>
       </Card>
+
+      <KycRequiredModal
+        open={gateOpen}
+        onClose={() => setGateOpen(false)}
+        missing={missingDocs()}
+        title="Complete verification to move money"
+      />
     </div>
   );
 }

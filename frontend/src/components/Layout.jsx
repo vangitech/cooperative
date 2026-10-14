@@ -24,6 +24,7 @@ import ChatWidget from '@/components/ChatWidget';
 
 const memberNav = [
   { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { to: '/verification', label: 'Verification', icon: BadgeCheck },
   { to: '/wallet', label: 'Wallet', icon: Wallet },
   { to: '/savings', label: 'Savings', icon: PiggyBank },
   { to: '/loans', label: 'Loans', icon: HandCoins },
@@ -210,8 +211,8 @@ export default function Layout() {
                   <DropdownMenuItem onClick={() => navigate('/profile')}>
                     <User className="h-4 w-4" /> Profile
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => navigate('/profile?tab=kyc')}>
-                    <BadgeCheck className="h-4 w-4" /> Additional verification
+                  <DropdownMenuItem onClick={() => navigate('/verification')}>
+                    <BadgeCheck className="h-4 w-4" /> Verification
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => navigate('/statement')}>
                     <FileText className="h-4 w-4" /> Report / Statement

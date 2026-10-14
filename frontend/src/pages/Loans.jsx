@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
 import { api } from '@/lib/api';
+import KycRequiredModal from '@/components/KycRequiredModal';
 import { useAuth } from '@/context/AuthContext';
 import { formatCurrency, formatDate } from '@/lib/format';
 import { Button } from '@/components/ui/button';
@@ -35,8 +35,18 @@ export default function Loans() {
   const [repayAmount, setRepayAmount] = useState('');
   const [schedule, setSchedule] = useState(null);
   // Loan pre-conditions (both sectors): recent utility bill + gov ID.
-  // The server re-checks on submit — this banner just explains it upfront.
+  // The server re-checks on submit — attempting without them pops the
+  // styled KYC modal instead of failing silently.
   const [docGate, setDocGate] = useState(null);
+  const [gateOpen, setGateOpen] = useState(false);
+
+  const missingDocs = () => {
+    if (!docGate) return [];
+    return [
+      !docGate.utilityRecent && 'A recent utility bill (electricity, water or waste — within 3 months)',
+      !docGate.hasGovId && 'A valid government ID (passport, driver’s license or voter’s card)',
+    ].filter(Boolean);
+  };
 
   const load = () => Promise.all([
     api.get('/loans').then(setLoans),
@@ -57,6 +67,10 @@ export default function Loans() {
 
   const apply = async (e) => {
     e.preventDefault(); setMsg(null);
+    if (docGate && (!docGate.hasGovId || !docGate.utilityRecent)) {
+      setGateOpen(true);
+      return;
+    }
     try {
       await api.post('/loans', {
         amount: Number(form.amount),
@@ -67,7 +81,10 @@ export default function Loans() {
       setForm({ amount: '', durationMonths: 6, purpose: '', productId: '' });
       await load();
       setMsg({ type: 'ok', text: 'Loan application submitted. Your grantor will review it first.' });
-    } catch (e) { setMsg({ type: 'err', text: e.message }); }
+    } catch (e) {
+      if (/KYC|verification|Upload/i.test(e.message)) setGateOpen(true);
+      else setMsg({ type: 'err', text: e.message });
+    }
   };
 
   const submitRepay = async () => {
@@ -98,17 +115,6 @@ export default function Loans() {
         <CardHeader><CardTitle>Apply for a Loan</CardTitle></CardHeader>
         <CardContent>
             <form onSubmit={apply} className="space-y-4">
-              {docGate && (!docGate.hasGovId || !docGate.utilityRecent) && (
-                <div className="text-sm bg-amber-50 text-amber-800 dark:bg-amber-950 dark:text-amber-200 p-3 rounded-md">
-                  Before applying, upload{' '}
-                  {[
-                    !docGate.utilityRecent && 'a recent utility bill (electricity, water or waste — within 3 months)',
-                    !docGate.hasGovId && 'a valid government ID (passport, driver\u2019s license or voter\u2019s card)',
-                  ].filter(Boolean).join(' and ')}{' '}
-                  under <Link to="/profile?tab=kyc" className="font-semibold underline">Profile → KYC</Link>.
-                  Applications without them are blocked.
-                </div>
-              )}
               {msg && <div className={`text-sm p-3 rounded-md ${msg.type === 'ok' ? 'bg-green-50 text-green-700 dark:bg-green-950 dark:text-green-300' : 'bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300'}`}>{msg.text}</div>}
               <div>
                 <Label>Loan Product</Label>
@@ -270,6 +276,13 @@ export default function Loans() {
           )}
         </DialogContent>
       </Dialog>
+
+      <KycRequiredModal
+        open={gateOpen}
+        onClose={() => setGateOpen(false)}
+        missing={missingDocs()}
+        title="Complete verification to borrow"
+      />
     </div>
   );
 }

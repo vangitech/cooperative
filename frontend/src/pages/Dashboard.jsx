@@ -3,162 +3,12 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/lib/api';
 import { formatCurrency, formatDateTime } from '@/lib/format';
 import StatCard from '@/components/StatCard';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Wallet, PiggyBank, HandCoins, TrendingUp, Megaphone, FileText, ShieldCheck, CheckCircle2, Upload, ReceiptText, IdCard } from 'lucide-react';
+import { Wallet, PiggyBank, HandCoins, TrendingUp, Megaphone, FileText, CheckCircle2 } from 'lucide-react';
 import { useBalanceHidden, masked, BalanceEye } from '@/components/balance';
 
-// Days a utility bill stays "recent" (electricity / water / waste).
-const UTILITY_MAX_AGE_DAYS = 93;
-const GOV_ID_TYPES = ['passport', 'drivers_license', 'voters_card', 'id_card'];
-const UTILITY_TYPES = ['utility_bill', 'proof_of_address'];
-
-function docAgeOk(d) {
-  const ref = new Date(d.doc_date || d.created_at);
-  if (Number.isNaN(ref.getTime())) return false;
-  return (Date.now() - ref.getTime()) / 86400000 <= UTILITY_MAX_AGE_DAYS;
-}
-
-function AdditionalVerification() {
-  const navigate = useNavigate();
-  const [kyc, setKyc] = useState(null);
-  const [uploading, setUploading] = useState(false);
-  const [billDate, setBillDate] = useState('');
-  const [govType, setGovType] = useState('passport');
-  const [msg, setMsg] = useState('');
-
-  const load = () => {
-    api.get('/kyc/me').then(setKyc).catch(() => setKyc(null));
-  };
-  useEffect(() => { load(); }, []);
-
-  const profile = kyc?.profile || null;
-  const documents = kyc?.documents || [];
-  let vr = profile?.verification_result || null;
-  if (typeof vr === 'string') {
-    try { vr = JSON.parse(vr); } catch { vr = null; }
-  }
-  const ninPassed = Boolean(
-    vr?.nin?.verified || (vr?.checks || []).some((c) => ['nin', 'reg_nin'].includes(c.key) && c.passed) || profile?.id_number
-  );
-  const bvnPassed = Boolean(
-    vr?.bvn?.verified || (vr?.checks || []).some((c) => ['bvn_match', 'reg_bvn_match'].includes(c.key) && c.passed) || profile?.bvn_verified
-  );
-  const ninHolder = vr?.nin?.holder || vr?.identity?.nin?.holder || null;
-  const bvnHolder = vr?.bvn?.holder || vr?.identity?.bvn?.holder || null;
-  const ninDob = vr?.nin?.dob || vr?.identity?.nin?.dob || null;
-  const bvnDob = vr?.bvn?.dob || vr?.identity?.bvn?.dob || null;
-  const govDoc = documents.find((d) => GOV_ID_TYPES.includes(d.doc_type)) || null;
-  const utilityDoc = documents
-    .filter((d) => UTILITY_TYPES.includes(d.doc_type))
-    .sort((a, b) => new Date(b.doc_date || b.created_at) - new Date(a.doc_date || a.created_at))[0] || null;
-  const utilityRecent = utilityDoc ? docAgeOk(utilityDoc) : false;
-  const kycStatus = profile?.status || 'missing';
-
-  // Fully done: identity passed + recent utility bill + gov ID + KYC approved.
-  if (ninPassed && bvnPassed && utilityRecent && govDoc && kycStatus === 'approved') return null;
-
-  const uploadFile = async (e, { docType, docDate }) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    setMsg('');
-    setUploading(true);
-    try {
-      if (f.size > 5 * 1024 * 1024) throw new Error(`${f.name} exceeds 5MB`);
-      if (!['image/jpeg', 'image/png', 'application/pdf'].includes(f.type)) {
-        throw new Error(`${f.name}: jpg, png or pdf only`);
-      }
-      const base64 = await new Promise((resolve, reject) => {
-        const r = new FileReader();
-        r.onload = () => resolve(String(r.result).split(',')[1]);
-        r.onerror = () => reject(new Error('Could not read file'));
-        r.readAsDataURL(f);
-      });
-      await api.post('/kyc/documents', { docType, filename: f.name, mime: f.type, data: base64, docDate: docDate || undefined });
-      e.target.value = '';
-      setMsg('Document uploaded — an admin will verify it shortly.');
-      load();
-    } catch (err) {
-      setMsg(err.message);
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  return (
-    <Card className="border-primary/30">
-      <CardHeader>
-        <div className="flex items-center justify-between gap-2">
-          <div>
-            <CardTitle className="text-base flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-primary" /> Additional verification
-            </CardTitle>
-            <CardDescription>Required for loans, withdrawals, transfers and bank payouts</CardDescription>
-          </div>
-          {kycStatus !== 'missing' && (
-            <Badge variant={kycStatus === 'approved' ? 'success' : kycStatus === 'pending' ? 'warning' : 'destructive'} className="capitalize">
-              KYC: {kycStatus}
-            </Badge>
-          )}
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="flex flex-wrap gap-2">
-          <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${ninPassed ? 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300' : 'bg-muted text-muted-foreground'}`}>
-            <CheckCircle2 className="h-3.5 w-3.5" /> NIN {ninPassed ? 'PASSED' : '—'}{ninHolder ? ` — ${ninHolder}` : ''}{ninDob ? ` · DOB ${ninDob}` : ''}
-          </span>
-          <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${bvnPassed ? 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300' : 'bg-muted text-muted-foreground'}`}>
-            <CheckCircle2 className="h-3.5 w-3.5" /> BVN {bvnPassed ? 'PASSED' : '—'}{bvnHolder ? ` — ${bvnHolder}` : ''}{bvnDob ? ` · DOB ${bvnDob}` : ''}
-          </span>
-          <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${utilityRecent ? 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300' : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'}`}>
-            <ReceiptText className="h-3.5 w-3.5" /> Utility bill {utilityRecent ? `recent (${String(utilityDoc.doc_date || utilityDoc.created_at).slice(0, 10)})` : utilityDoc ? 'too old — upload newer' : 'needed'}
-          </span>
-          <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold ${govDoc ? 'bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300' : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'}`}>
-            <IdCard className="h-3.5 w-3.5" /> Gov ID {govDoc ? govDoc.doc_type.replaceAll('_', ' ') : 'needed'}
-          </span>
-        </div>
-        {msg && <p className="text-xs rounded-md bg-muted p-2">{msg}</p>}
-        <div className="grid gap-2 sm:grid-cols-2">
-          <div className="rounded-md border p-2.5 space-y-2">
-            <p className="text-xs font-semibold">1. Recent utility bill <span className="font-normal text-muted-foreground">(electricity, water or waste — within 3 months)</span></p>
-            <div>
-              <label className="text-xs text-muted-foreground" htmlFor="dash-bill-date">Bill date (printed on the bill)</label>
-              <input
-                id="dash-bill-date" type="date" value={billDate} onChange={(e) => setBillDate(e.target.value)}
-                max={new Date().toISOString().slice(0, 10)}
-                className="mt-1 w-full h-9 rounded-md border border-input bg-background px-2 text-sm"
-              />
-            </div>
-            <label className="flex items-center justify-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground cursor-pointer hover:border-primary">
-              <Upload className="h-4 w-4" /> {uploading ? 'Uploading…' : 'Upload bill…'}
-              <input type="file" accept=".jpg,.jpeg,.png,.pdf" className="hidden" disabled={uploading || !billDate} onChange={(e) => uploadFile(e, { docType: 'utility_bill', docDate: billDate })} />
-            </label>
-            {!billDate && <p className="text-[11px] text-muted-foreground">Pick the bill date first.</p>}
-          </div>
-          <div className="rounded-md border p-2.5 space-y-2">
-            <p className="text-xs font-semibold">2. Government ID <span className="font-normal text-muted-foreground">(passport, driver&rsquo;s license or PVC)</span></p>
-            <select
-              value={govType} onChange={(e) => setGovType(e.target.value)}
-              className="w-full h-9 rounded-md border border-input bg-background px-2 text-sm"
-            >
-              <option value="passport">International Passport</option>
-              <option value="drivers_license">Driver&rsquo;s License</option>
-              <option value="voters_card">Voter&rsquo;s Card (PVC)</option>
-            </select>
-            <label className="flex items-center justify-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground cursor-pointer hover:border-primary">
-              <Upload className="h-4 w-4" /> {uploading ? 'Uploading…' : 'Upload ID…'}
-              <input type="file" accept=".jpg,.jpeg,.png,.pdf" className="hidden" disabled={uploading} onChange={(e) => uploadFile(e, { docType: govType })} />
-            </label>
-          </div>
-        </div>
-        <Button variant="outline" size="sm" onClick={() => navigate('/profile?tab=kyc')}>
-          Open full KYC
-        </Button>
-      </CardContent>
-    </Card>
-  );
-}
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -244,13 +94,14 @@ export default function Dashboard() {
             </p>
             <p>
               NIN PASSED{holderSuffix(regIdentity?.nin?.holder)} · BVN PASSED{holderSuffix(regIdentity?.bvn?.holder)}.
-              One last step below: upload a utility bill to finish verification.
+              One last step: complete your Verification section to unlock loans and payouts.
             </p>
+            <Button size="sm" variant="outline" onClick={() => navigate('/verification')}>
+              Go to Verification
+            </Button>
           </CardContent>
         </Card>
       )}
-
-      <AdditionalVerification />
 
       {notices.length > 0 && (
         <Card className="border-primary/30">

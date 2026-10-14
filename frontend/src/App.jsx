@@ -17,6 +17,7 @@ const Savings = lazy(() => import('@/pages/Savings'));
 const Loans = lazy(() => import('@/pages/Loans'));
 const Dividends = lazy(() => import('@/pages/Dividends'));
 const Profile = lazy(() => import('@/pages/Profile'));
+const Verification = lazy(() => import('@/pages/Verification'));
 const Market = lazy(() => import('@/pages/Market'));
 const Statement = lazy(() => import('@/pages/Statement'));
 
@@ -63,6 +64,7 @@ export default function App() {
               <Route path="/loans" element={<Loans />} />
               <Route path="/dividends" element={<Dividends />} />
               <Route path="/profile" element={<Profile />} />
+              <Route path="/verification" element={<Verification />} />
               <Route path="/market" element={<Market />} />
               <Route path="/statement" element={<Statement />} />
             </Route>
